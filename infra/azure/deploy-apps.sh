@@ -45,6 +45,7 @@ WEB_APP="$(out webAppName)";       WEB_APP="${WEB_APP:-$PREFIX-$ENV_NAME-web}"
 WORKER_APP="$(out workerAppName)"; WORKER_APP="${WORKER_APP:-$PREFIX-$ENV_NAME-worker}"
 DEADMAN_APP="$(out deadmanAppName)"; DEADMAN_APP="${DEADMAN_APP:-$PREFIX-$ENV_NAME-deadman}"
 AFD_HOST="$(out frontDoorEndpointHostName)"
+DEPLOYED_BASE_URL="$(out baseUrl)" # lean profile: the web app's own URL (no Front Door)
 
 if [[ -z "$TAG" ]]; then
   TAG="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
@@ -76,7 +77,7 @@ else
   az containerapp update -g "$CORE_RG" -n "$DEADMAN_APP" --image "$ACR_LOGIN/reddysec-app:$TAG" -o none
 fi
 
-BASE_URL="${APP_BASE_URL:-https://$AFD_HOST}"
+BASE_URL="${APP_BASE_URL:-${DEPLOYED_BASE_URL:-https://$AFD_HOST}}"
 log "Smoke test $BASE_URL/healthz"
 for i in $(seq 1 20); do
   if curl -fsS --max-time 10 "$BASE_URL/healthz" >/dev/null; then

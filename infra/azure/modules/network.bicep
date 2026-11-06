@@ -1,6 +1,8 @@
 // Network: one VNet, three subnets, two NAT gateways, the detonation NSG and
 // the private DNS zones every private endpoint needs.
 //
+// lean=true (dev cost profile): Postgres is the only private DNS zone.
+//
 //   apps        Container Apps environment (web, worker, deadman)
 //   data        private endpoints (Key Vault, Storage, Postgres, ACR, Service Bus)
 //   detonation  ACI container groups, one per detonation. "Dirty" subnet:
@@ -30,6 +32,9 @@ param acrPrivateEndpointIps array
 
 @description('Deploy a NAT gateway for the apps subnet (stable platform egress IP). Set false to save ~USD 35/month in dev.')
 param deployAppsNatGateway bool = true
+
+@description('Lean cost profile (dev): only the Postgres private DNS zone is created (Key Vault, Blob, ACR and Service Bus use their public endpoints).')
+param lean bool = false
 
 @description('Principal id of the worker identity. Gets Network Contributor on the detonation subnet so it can create VNet-injected container groups.')
 param workerPrincipalId string
@@ -393,6 +398,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           addressPrefix: appsSubnetPrefix
           networkSecurityGroup: { id: appsNsg.id }
           natGateway: deployAppsNatGateway ? { id: appsNat.id } : null
+          // Required for both environment types since 2025 (the API rejects an
+          // undelegated subnet with ManagedEnvironmentSubnetDelegationError,
+          // Consumption-only included).
           delegations: [
             {
               name: 'containerapps'
@@ -461,16 +469,39 @@ resource workerSubnetJoin 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 // Private DNS zones (one per private-link service) linked to the VNet
 // ---------------------------------------------------------------------------
 
-var privateDnsZoneNames = [
-  'privatelink.vaultcore.azure.net'
-  'privatelink.blob.${environment().suffixes.storage}'
-  'privatelink.postgres.database.azure.com'
-  'privatelink.azurecr.io'
-  'privatelink.servicebus.windows.net'
-]
+// Postgres has publicNetworkAccess Disabled in every profile, so its zone is
+// always needed. The other four exist only when the matching service gets a
+// private endpoint (standard profile).
+var postgresDnsZoneName = 'privatelink.postgres.database.azure.com'
+
+var optionalDnsZoneNames = lean
+  ? []
+  : [
+      'privatelink.vaultcore.azure.net'
+      'privatelink.blob.${environment().suffixes.storage}'
+      'privatelink.azurecr.io'
+      'privatelink.servicebus.windows.net'
+    ]
+
+resource postgresDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: postgresDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource postgresDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: postgresDnsZone
+  name: '${namePrefix}-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: { id: vnet.id }
+  }
+}
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [
-  for zoneName in privateDnsZoneNames: {
+  for zoneName in optionalDnsZoneNames: {
     name: zoneName
     location: 'global'
     tags: tags
@@ -478,7 +509,7 @@ resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [
 ]
 
 resource privateDnsZoneLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [
-  for (zoneName, i) in privateDnsZoneNames: {
+  for (zoneName, i) in optionalDnsZoneNames: {
     parent: privateDnsZones[i]
     name: '${namePrefix}-link'
     location: 'global'
@@ -553,8 +584,9 @@ output dataSubnetId string = dataSubnet.id
 output detonationSubnetId string = detonationSubnet.id
 output detonationEgressIps array = [for i in range(0, 2): detonationPip[i].properties.ipAddress]
 output appsEgressIp string = appsPip.?properties.?ipAddress ?? ''
-output keyVaultDnsZoneId string = privateDnsZones[0].id
-output blobDnsZoneId string = privateDnsZones[1].id
-output postgresDnsZoneId string = privateDnsZones[2].id
-output acrDnsZoneId string = privateDnsZones[3].id
-output serviceBusDnsZoneId string = privateDnsZones[4].id
+output postgresDnsZoneId string = postgresDnsZone.id
+// Empty in the lean profile (no private endpoint for these services).
+output keyVaultDnsZoneId string = lean ? '' : privateDnsZones[0].id
+output blobDnsZoneId string = lean ? '' : privateDnsZones[1].id
+output acrDnsZoneId string = lean ? '' : privateDnsZones[2].id
+output serviceBusDnsZoneId string = lean ? '' : privateDnsZones[3].id

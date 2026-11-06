@@ -5,7 +5,9 @@
 //   quarantine-originals  deleted 90 days after last modification
 //
 // Identity-only access (shared keys disabled), private endpoint only, TLS 1.2,
-// no versioning. Blob soft delete is OFF on purpose: the 30/90-day retention
+// no versioning. lean=true (dev cost profile): public endpoint instead of the
+// private endpoint; still identity-only (no shared keys, no anonymous blobs),
+// so a caller needs one of the three app identities' roles. Blob soft delete is OFF on purpose: the 30/90-day retention
 // is a promise to the client, and a soft-deleted blob still exists.
 
 param location string
@@ -32,6 +34,9 @@ param dataSubnetId string
 param privateDnsZoneId string
 param logAnalyticsWorkspaceId string
 
+@description('Lean cost profile: public endpoint (identity-only auth), no private endpoint.')
+param lean bool = false
+
 var blobDataContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 var blobDataReaderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
 
@@ -49,10 +54,10 @@ resource account 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
     allowCrossTenantReplication: false
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: lean ? 'Enabled' : 'Disabled'
     networkAcls: {
       bypass: 'AzureServices'
-      defaultAction: 'Deny'
+      defaultAction: lean ? 'Allow' : 'Deny'
     }
     encryption: {
       keySource: 'Microsoft.Storage'
@@ -129,7 +134,7 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
   }
 }
 
-module privateEndpoint 'private-endpoint.bicep' = {
+module privateEndpoint 'private-endpoint.bicep' = if (!lean) {
   name: '${storageAccountName}-pe'
   params: {
     location: location

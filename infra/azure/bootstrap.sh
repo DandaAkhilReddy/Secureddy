@@ -13,8 +13,12 @@
 #   4. seeds Key Vault secrets that do not exist yet (random where possible)
 #   5. builds and pushes the app and chamber images with ACR Tasks
 #   6. stage 2 deployment: Container Apps, Front Door, alerts
-#   7. approves the Front Door -> Container Apps private link
+#   7. approves the Front Door -> Container Apps private link (standard profile)
 #   8. prints DNS records, GitHub OIDC values and next steps
+#
+# costProfile=lean in the .bicepparam (dev): no Front Door, so step 7 is skipped,
+# the web app's own *.azurecontainerapps.io URL is the base URL, and the chamber
+# pull credential is the ACR admin user (Basic SKU has no scoped tokens).
 #
 # Requirements: az (>= 2.60), openssl, curl, python3, git. No local Docker.
 
@@ -60,6 +64,7 @@ LOCATION="${LOCATION:-$(param_value location)}"
 CORE_RG="${CORE_RG:-rg-secureddy-$ENV_NAME}"
 DET_RG="${DET_RG:-$(param_value detonationResourceGroupName)}"
 CUSTOM_DOMAIN="$(param_value customDomain)"
+COST_PROFILE="$(param_value costProfile)"; COST_PROFILE="${COST_PROFILE:-standard}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -81,7 +86,7 @@ SUB_ID="$(az account show --query id -o tsv)"
 SUB_NAME="$(az account show --query name -o tsv)"
 TENANT_ID="$(az account show --query tenantId -o tsv)"
 echo "subscription: $SUB_NAME ($SUB_ID)"
-echo "environment : $ENV_NAME   location: $LOCATION"
+echo "environment : $ENV_NAME   location: $LOCATION   cost profile: $COST_PROFILE"
 echo "core RG     : $CORE_RG"
 echo "detonation  : $DET_RG"
 if [[ "$ASSUME_YES" != "1" ]]; then
@@ -197,7 +202,8 @@ ACR_LOGIN="$(out acrLoginServer "$STAGE1")"
 PG_FQDN="$(out postgresFqdn "$STAGE1")"
 PG_DB="$(out postgresDatabase "$STAGE1")"
 PG_ADMIN="$(out postgresAdministratorLogin "$STAGE1")"
-TOKEN_NAME="$(out acrChamberPullTokenName "$STAGE1")"
+PULL_USERNAME="$(out acrChamberPullUsername "$STAGE1")"
+ACR_ADMIN_USER="$(out acrAdminUserEnabled "$STAGE1")"
 DEPLOY_CLIENT_ID="$(out deployIdentityClientId "$STAGE1")"
 echo "Key Vault: $KV_NAME   ACR: $ACR_LOGIN   Postgres: $PG_FQDN"
 
@@ -229,9 +235,22 @@ else
   echo "   rs-google-client-secret: exists"
 fi
 
-if ! kv_secret_exists "$KV_NAME" acr-chamber-pull-password; then
+if [[ "$ACR_ADMIN_USER" == "True" || "$ACR_ADMIN_USER" == "true" ]]; then
+  # lean profile: ACR Basic has no scope maps, so detonation container groups
+  # pull with the registry admin user. Keep the secret equal to the live
+  # password (it changes when someone regenerates the admin credential or
+  # when a registry moves from the standard profile's token to this).
+  ADMIN_PW="$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)"
+  CURRENT_PW="$(az keyvault secret show --vault-name "$KV_NAME" --name acr-chamber-pull-password --query value -o tsv 2>/dev/null || true)"
+  if [[ "$CURRENT_PW" == "$ADMIN_PW" ]]; then
+    echo "   acr-chamber-pull-password: exists (ACR admin user $PULL_USERNAME)"
+  else
+    kv_set_with_retry "$KV_NAME" acr-chamber-pull-password "$ADMIN_PW"
+    echo "   acr-chamber-pull-password: set to the ACR admin password (user $PULL_USERNAME)"
+  fi
+elif ! kv_secret_exists "$KV_NAME" acr-chamber-pull-password; then
   echo "   generating repository-scoped pull token for the chamber image"
-  TOKEN_PW="$(az acr token credential generate --name "$TOKEN_NAME" --registry "$ACR_NAME" \
+  TOKEN_PW="$(az acr token credential generate --name "$PULL_USERNAME" --registry "$ACR_NAME" \
       --expiration-in-days 365 --password1 --query 'passwords[0].value' -o tsv)"
   ensure_secret "$KV_NAME" acr-chamber-pull-password "$TOKEN_PW"
 else
@@ -257,18 +276,27 @@ fi
 # ---------------------------------------------------------------------------
 # 6. stage 2
 # ---------------------------------------------------------------------------
-log "Stage 2: Container Apps, Front Door, alerts"
+if [[ "$COST_PROFILE" == "lean" ]]; then
+  log "Stage 2: Container Apps (public ingress, no Front Door), alerts"
+else
+  log "Stage 2: Container Apps, Front Door, alerts"
+fi
 STAGE2="$(deploy "rsec-$ENV_NAME-stage2" true)"
 ENV_ID="$(out containerAppsEnvironmentId "$STAGE2")"
 AFD_HOST="$(out frontDoorEndpointHostName "$STAGE2")"
 AFD_ID="$(out frontDoorId "$STAGE2")"
 DNS_TOKEN="$(out customDomainValidationToken "$STAGE2")"
 WEB_FQDN="$(out webFqdn "$STAGE2")"
+BASE_URL="$(out baseUrl "$STAGE2")"
 DET_IPS="$(python3 -c 'import json,sys; print(", ".join(json.load(sys.stdin)["detonationEgressIps"]["value"]))' <<<"$STAGE2")"
 
 # ---------------------------------------------------------------------------
 # 7. approve Front Door private link to the Container Apps environment
+#    (standard profile only; the lean profile has no edge, so nothing to approve)
 # ---------------------------------------------------------------------------
+if [[ -z "$AFD_HOST" ]]; then
+  log "No Front Door in this profile; skipping the private link approval"
+else
 log "Approving the Front Door private endpoint connection"
 for i in $(seq 1 20); do
   PENDING="$(az network private-endpoint-connection list --id "$ENV_ID" \
@@ -286,11 +314,20 @@ for i in $(seq 1 20); do
   if [[ "$APPROVED" != "0" ]]; then echo "   already approved"; break; fi
   echo "   waiting for the connection request ($i/20)..."; sleep 15
 done
+fi
 
 # ---------------------------------------------------------------------------
 # 8. next steps
 # ---------------------------------------------------------------------------
 log "Done. Next steps"
+if [[ -z "$AFD_HOST" ]]; then
+cat <<EOF
+
+Web (lean profile: public ingress, managed certificate, no Front Door / WAF)
+  URL                 : $BASE_URL
+  Health              : $BASE_URL/healthz
+EOF
+else
 cat <<EOF
 
 Edge
@@ -298,7 +335,10 @@ Edge
   Front Door id       : $AFD_ID   (web may check the X-Azure-FDID header against this)
   Web origin (private): $WEB_FQDN
 EOF
-if [[ -n "$CUSTOM_DOMAIN" ]]; then
+fi
+if [[ -z "$AFD_HOST" ]]; then
+  :
+elif [[ -n "$CUSTOM_DOMAIN" ]]; then
 cat <<EOF
   DNS records for $CUSTOM_DOMAIN (at your DNS provider):
     CNAME  $CUSTOM_DOMAIN  ->  $AFD_HOST
@@ -315,16 +355,24 @@ cat <<EOF
 Detonation egress IPs (what phishing sites see): $DET_IPS
 
 Google OAuth (docs/google-oauth-setup.md)
-  Authorized redirect URI: $(param_value baseUrl)/auth/google/callback
-  Pub/Sub push endpoint  : $(param_value baseUrl)/hooks/gmail/pubsub?token=\$(az keyvault secret show --vault-name $KV_NAME --name rs-pubsub-token --query value -o tsv)
+  Authorized redirect URI: $BASE_URL/auth/google/callback
+  Pub/Sub push endpoint  : $BASE_URL/hooks/gmail/pubsub?token=\$(az keyvault secret show --vault-name $KV_NAME --name rs-pubsub-token --query value -o tsv)
 
 GitHub Actions (OIDC). Create environments 'dev' and 'prod' in the repo and set per environment:
   secrets : AZURE_CLIENT_ID=$DEPLOY_CLIENT_ID  AZURE_TENANT_ID=$TENANT_ID  AZURE_SUBSCRIPTION_ID=$SUB_ID
-  vars    : AZURE_RESOURCE_GROUP=$CORE_RG  ACR_NAME=$ACR_NAME  APP_BASE_URL=$(param_value baseUrl)
+  vars    : AZURE_RESOURCE_GROUP=$CORE_RG  ACR_NAME=$ACR_NAME  APP_BASE_URL=$BASE_URL
 
 First admin user: see docs/azure-deploy.md ("First admin user").
 
+EOF
+if [[ "$COST_PROFILE" == "lean" ]]; then
+cat <<EOF
+Key Vault public endpoint is OPEN (lean profile; access is RBAC-only). --lockdown has no effect here.
+EOF
+else
+cat <<EOF
 Key Vault public endpoint is $( [[ "$LOCKDOWN" == "1" ]] && echo "DISABLED" || echo "open to $MY_IP only" ).
   Lock it down when you no longer need to write secrets from this machine:
     $0 $ENV_NAME --lockdown --skip-images
 EOF
+fi

@@ -30,6 +30,7 @@ pg_storage_gb = 0.115
 pg_backup_gb = 0.095
 sb_standard_month = 10.0
 acr_premium_day = 1.6666
+acr_basic_day = 0.1666
 kv_ops_10k = 0.03
 law_gb = 2.30
 law_retention_gb_month = 0.10
@@ -116,6 +117,25 @@ dev = {
 }
 dev_total = sum(dev.values())
 
+# --- dev, costProfile=lean (infra/azure/main.dev.bicepparam) --------------------
+# No Front Door, Consumption-only Container Apps environment (no environment
+# meters), no Service Bus, no apps NAT gateway, ACR Basic, private endpoint
+# only for Postgres. Alerts: 2 log + 5 metric (the two edge alerts are gone).
+lean = {
+    "Postgres B1ms, 32 GB, no HA": pg_b1ms_hr * H + 32 * pg_storage_gb,
+    "Container Apps: web 1 + worker 1 + deadman 1 (mostly idle)": aca_app(1, 2, 1, 0.05)
+    + aca_app(1, 2, 1, 0.05)
+    + aca_app(0.5, 1, 1, 0.02),
+    "NAT gateway x1 (detonation) + 2 IPs": nat_gw_hr * H + 2 * pip_hr * H,
+    "Private endpoint x1 (Postgres) + 1 DNS zone [MEM]": pe_hr * H + dns_zone_month,
+    "ACR Basic": acr_basic_day * D,
+    "Key Vault (~100k ops)": 10 * kv_ops_10k,
+    "Log Analytics (~3 GB, 30 days, 1 GB/day cap)": 3 * law_gb,
+    "Alerts: 2 log + 5 metric [MEM]": 2 * log_alert_month + 5 * metric_alert_month,
+    "Storage account (platform, <5 GB)": 5 * blob_gb,
+}
+lean_total = sum(lean.values())
+
 
 def scale_extra(clients):
     # more clients -> more web/worker replicas. Rough: +1 worker per 40 clients, +1 web per 50.
@@ -140,6 +160,10 @@ print()
 for k, v in dev.items():
     print(f"{k:<72} {v:9.2f}")
 print(f"{'FIXED TOTAL (dev)':<72} {dev_total:9.2f}")
+print()
+for k, v in lean.items():
+    print(f"{k:<72} {v:9.2f}")
+print(f"{'FIXED TOTAL (dev, lean profile)':<72} {lean_total:9.2f}")
 print()
 for n in (1, 10, 100):
     extra = scale_extra(n)

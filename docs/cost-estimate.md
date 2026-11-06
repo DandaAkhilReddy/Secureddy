@@ -2,6 +2,8 @@
 
 Pay-as-you-go list prices in USD for **West US 2**, read from the Azure Retail
 Prices API (`https://prices.azure.com/api/retail/prices`) on **2026-11-05**.
+Dev runs in East US; the ACR Basic line was read for East US and the other
+meters are assumed to match (they are the same in the public price list).
 Three items the API does not expose (Private Link, private DNS zones, alert
 rules) are marked **MEM** and come from memory of the public price list; treat
 them as approximate. No reservations or savings plans are applied; Postgres
@@ -28,7 +30,7 @@ The arithmetic is in one script, so you can re-run it with new prices:
 | Postgres Flexible Burstable B1ms | 0.017 / hour | API |
 | Postgres storage / backup storage | 0.115 / 0.095 per GB-month | API |
 | Service Bus Standard base | 10.00 / month | API |
-| ACR Premium | 1.6666 / day | API |
+| ACR Premium / Basic | 1.6666 / 0.1666 per day | API |
 | Key Vault operations | 0.03 / 10k | API |
 | Log Analytics ingestion / retention beyond 31 days | 2.30 / GB, 0.10 / GB-month | API |
 | Blob Hot LRS | 0.0184 / GB-month | API |
@@ -121,12 +123,50 @@ Three lines are worth a second look:
   Consumption-only workload-profile environment; if they do not, the fixed
   total drops to ~990.
 
-**Fixed total, dev** (Burstable Postgres, no HA, one replica each, no apps NAT
-gateway, 30-day logs): about **720 / month**, of which 330 is Front Door. If dev
-does not need the edge, deploy it with `deployApps=true` but skip the `edge`
-module (set `customDomain=''` and remove the module in a dev-only copy), or
-simply tear dev down when idle: `az group delete`. Everything comes back from
-`bootstrap.sh dev` in 30 minutes.
+**Fixed total, dev, standard profile** (Burstable Postgres, no HA, one replica
+each, no apps NAT gateway, 30-day logs): about **720 / month**, of which 330 is
+Front Door and 146 the two environment meters. That is what
+`costProfile = 'standard'` costs in dev; the dev parameter file now uses the
+lean profile below instead.
+
+## 5a. Lean dev profile (`costProfile = 'lean'`)
+
+`main.dev.bicepparam` sets `costProfile = 'lean'`. The template then drops
+everything that only pays for prod-grade isolation: no Front Door, a
+Consumption-only Container Apps environment (no workload profiles, so neither
+of the two environment meters applies) with public ingress on the free
+`*.azurecontainerapps.io` certificate, no Service Bus, no apps NAT gateway,
+ACR Basic with the admin user as the chamber pull credential, and public
+endpoints (RBAC / identity auth only) for Key Vault, Blob and ACR. Postgres
+keeps its private endpoint because the server has public access disabled.
+The detonation subnet, NSG, NAT gateway and the two egress IPs are unchanged:
+that is the product. Trade-offs are in `azure-deploy.md`, "Cost profiles".
+
+| Item | Formula | USD / month |
+|------|---------|------------:|
+| Postgres B1ms, 32 GB, no HA | 0.017 x 730 + 32 x 0.115 | 16.09 |
+| Container Apps: web 1 vCPU / 2 GiB, 5% active | (0.95 x 0.000004 + 0.05 x 0.000034 + 2 x 0.000004) x 3600 x 730 | 35.48 |
+| Container Apps: worker, same shape | same | 35.48 |
+| Container Apps: deadman 0.5 vCPU / 1 GiB, 2% active | (0.5 x (0.98 x 0.000004 + 0.02 x 0.000034) + 0.000004) x 3600 x 730 | 16.56 |
+| NAT gateway x1 (detonation) | 0.045 x 730 | 32.85 |
+| Public IPs x2 (detonation egress) | 2 x 0.005 x 730 | 7.30 |
+| Private endpoint x1 (Postgres) + 1 private DNS zone (MEM) | 0.01 x 730 + 0.50 | 7.80 |
+| ACR Basic | 0.1666 x 30.4 | 5.06 |
+| Key Vault (~100k operations) | 10 x 0.03 | 0.30 |
+| Log Analytics (~3 GB, 30-day retention, 1 GB/day cap) | 3 x 2.30 | 6.90 |
+| Alert rules: 2 log + 5 metric (MEM) | 2 x 1.50 + 5 x 0.10 | 3.50 |
+| Storage account (< 5 GB) | 5 x 0.0184 | 0.09 |
+| **Fixed total, dev, lean** | | **167.41** |
+
+Formula: `Postgres + Container Apps + detonation NAT + 2 IPs + Postgres PE/DNS
++ ACR Basic + Key Vault + logs + alerts + storage`, all other lines of the
+standard table are zero. The Consumption plan's monthly free grant (180,000
+vCPU-seconds, 360,000 GiB-seconds) and NAT/log data processing are not
+counted; they move the total by about one dollar either way. Compared with
+the standard dev shape this saves ~550 / month, 70% of which is Front Door
+and 26% the environment meters. Per-detonation cost is slightly lower too:
+the chamber image is pulled over the public ACR endpoint (no Private Link
+data charge), so a detonation is ~0.0025 instead of 0.0125.
 
 ## 6. Totals
 

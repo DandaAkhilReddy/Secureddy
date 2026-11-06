@@ -1,5 +1,13 @@
 // Key Vault: RBAC mode, purge protection, soft delete, private endpoint.
 //
+// lean=true (dev cost profile): no private endpoint, public endpoint open
+// (defaultAction Allow). Container Apps on a Consumption-only environment have
+// no stable outbound IP and Key Vault references do not reliably ride the
+// AzureServices bypass, so the firewall cannot be used. RBAC still gates every
+// read (only the three app identities, the deploy identity and the operator
+// have a role) and the vault only holds dev secrets. Prod keeps the private
+// endpoint and the deny-by-default firewall.
+//
 // Secrets are NOT created here. Bicep would put their values in deployment
 // history. infra/azure/bootstrap.sh creates them (random where possible,
 // prompted otherwise). Names the apps expect (Key Vault names cannot contain
@@ -38,6 +46,9 @@ param dataSubnetId string
 param privateDnsZoneId string
 param logAnalyticsWorkspaceId string
 
+@description('Lean cost profile: public endpoint with defaultAction Allow, no private endpoint. See the header comment for the trade-off.')
+param lean bool = false
+
 var secretsUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var secretsOfficerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
 
@@ -55,17 +66,18 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enabledForTemplateDeployment: true
     enabledForDeployment: false
     enabledForDiskEncryption: false
-    publicNetworkAccess: empty(adminIpAllowList) ? 'Disabled' : 'Enabled'
+    publicNetworkAccess: (lean || !empty(adminIpAllowList)) ? 'Enabled' : 'Disabled'
     networkAcls: {
       bypass: 'AzureServices'
-      defaultAction: 'Deny'
+      // lean: Allow (RBAC-only protection, see header). standard: Deny + operator IPs.
+      defaultAction: lean ? 'Allow' : 'Deny'
       ipRules: [for ip in adminIpAllowList: { value: ip }]
       virtualNetworkRules: []
     }
   }
 }
 
-module privateEndpoint 'private-endpoint.bicep' = {
+module privateEndpoint 'private-endpoint.bicep' = if (!lean) {
   name: '${keyVaultName}-pe'
   params: {
     location: location

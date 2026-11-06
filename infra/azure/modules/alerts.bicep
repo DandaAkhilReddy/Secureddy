@@ -18,7 +18,8 @@ param tags object = {}
 param actionGroupId string
 param logAnalyticsWorkspaceId string
 
-param frontDoorProfileId string
+@description('Front Door profile id. Empty (lean profile, no edge) skips the two edge alerts.')
+param frontDoorProfileId string = ''
 param webAppId string
 param workerAppId string
 param deadmanAppId string
@@ -218,7 +219,7 @@ resource aciCreateFailures 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
 // Metric alerts
 // ---------------------------------------------------------------------------
 
-resource frontDoor5xx 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+resource frontDoor5xx 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(frontDoorProfileId)) {
   name: '${namePrefix}-alert-edge-5xx'
   location: 'global'
   tags: tags
@@ -248,7 +249,7 @@ resource frontDoor5xx 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   }
 }
 
-resource frontDoorOriginHealth 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+resource frontDoorOriginHealth 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(frontDoorProfileId)) {
   name: '${namePrefix}-alert-edge-origin-health'
   location: 'global'
   tags: tags

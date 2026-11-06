@@ -23,6 +23,10 @@ parameter file per environment, one bootstrap script. Region: West US 2.
 Two resource groups: `rg-secureddy-<env>` (everything) and
 `rg-secureddy-<env>-detonations` (empty; container groups come and go).
 
+The diagram is the **standard** cost profile (prod). Dev uses the **lean**
+profile, which keeps the detonation half of the picture and simplifies the
+rest; see "Cost profiles" below before reading the sections on Front Door.
+
 ## Prerequisites
 
 - Azure subscription where you are **Owner** (role assignments and a policy
@@ -50,7 +54,8 @@ Two resource groups: `rg-secureddy-<env>` (everything) and
 
 | Parameter | What to put |
 |-----------|-------------|
-| `baseUrl`, `customDomain` | `https://app.<domain>` and `app.<domain>`. Leave `customDomain = ''` on the first run if DNS is not ready; the `*.azurefd.net` host works meanwhile. |
+| `costProfile` | `standard` (prod) or `lean` (dev). See "Cost profiles". |
+| `baseUrl`, `customDomain` | `https://app.<domain>` and `app.<domain>`. Leave `customDomain = ''` on the first run if DNS is not ready; the `*.azurefd.net` host works meanwhile. Lean profile: leave `baseUrl = ''` and the template uses the web app's own `https://rsec-<env>-web.<env default domain>`. |
 | `keyVaultName`, `storageAccountName`, `acrName`, `postgresServerName`, `serviceBusNamespaceName` | globally unique names, or `''` to derive them |
 | `googleClientId`, `googlePubsubTopic` | from the GCP project (can be empty at first) |
 | `alertEmails`, `notificationFrom` | your addresses |
@@ -90,6 +95,73 @@ time (Front Door and Postgres HA are slow). What happens:
 Re-running is safe. `--skip-images` skips the ACR builds; `--lockdown` removes
 your IP from Key Vault once you are done writing secrets.
 
+In the lean profile the script skips step 6 (no Front Door), stores the ACR
+admin password instead of a scoped token as `acr-chamber-pull-password`, and
+prints the web app URL in place of the Front Door endpoint.
+
+## 2a. Cost profiles (`costProfile`)
+
+One parameter switches the shape of the deployment. Prod stays on `standard`;
+`main.dev.bicepparam` is on `lean`, which runs for about USD 167/month instead
+of 720 (`cost-estimate.md`, section 5a). Every module reads a `lean` boolean
+derived from it, so the standard path is unchanged.
+
+| | standard | lean |
+|---|---|---|
+| Edge | Front Door Premium, WAF, Private Link to the environment | none; web is reached directly |
+| Container Apps environment | `rsec-<env>-cae`, workload profiles, internal, public access off | `rsec-<env>-cae-lean`, Consumption-only, external, public ingress, free `*.azurecontainerapps.io` TLS |
+| Apps subnet | /23, delegated to `Microsoft.App/environments` | same (the platform now requires the delegation for Consumption-only environments too) |
+| Apps NAT gateway | per `deployAppsNatGateway` | never (not supported on Consumption-only; egress IP is dynamic) |
+| Service Bus | Standard namespace, two queues, queue-length scale rule on the worker | not deployed; `RS_SERVICEBUS_*` are empty, worker runs a fixed replica count |
+| Key Vault | private endpoint; public endpoint off, or firewall with the operator IP | public endpoint, `defaultAction: Allow`, no private endpoint |
+| Blob | private endpoint, public off | public endpoint, `defaultAction: Allow`, identity-only auth (shared keys stay disabled) |
+| ACR | Premium, private endpoint with static IPs, repository-scoped `chamber-pull` token | Basic, public endpoint, admin user on; its password is the chamber pull credential |
+| Postgres | private endpoint + private DNS zone | same (public access is disabled on the server) |
+| Private DNS zones | 5 | 1 (postgres) |
+| Alerts | 2 log, 7 metric, 1 activity | 2 log, 5 metric, 1 activity (no edge alerts) |
+
+**Security trade-offs of lean, and why they are acceptable for dev only:**
+
+- *No WAF, no bot manager, no rate limit at the edge.* The web app's own
+  ingress terminates TLS and forwards everything. Rate limiting and the
+  `X-Azure-FDID` origin check (section 3) do not exist here; do not run client
+  data through a lean deployment.
+- *Key Vault and Blob are reachable from the Internet.* Only RBAC stands
+  between a request and a secret: the three app identities (Secrets User /
+  Blob Data Contributor), the deploy identity and the operator. This is the
+  same model Azure uses for every "public endpoint + RBAC" vault, but it
+  removes the network layer. The firewall cannot be used instead because a
+  Consumption-only environment has no stable outbound IP and Key Vault
+  references from Container Apps do not reliably use the `AzureServices`
+  bypass. The vault holds only dev secrets; `--lockdown` is a no-op in lean.
+- *ACR admin credential.* Basic has no scope maps, so detonation container
+  groups pull with the admin user, which can push and pull every repository in
+  the dev registry. In standard the token can only read `reddysec-chamber`.
+  Detonation containers still have no identity and the NSG still blocks
+  everything private; the credential lives in Key Vault and in the worker's
+  secret store, the same places as the token did.
+- *Public ingress on the Container Apps environment.* Anyone can reach
+  `/healthz` and the login page. The app authenticates everything else.
+- *No apps NAT gateway.* Google / IMAP see a changing egress IP; the
+  detonation egress IPs are unaffected.
+
+What does not change: identities and roles, the detonation subnet / NSG / NAT /
+policies, Postgres private access, Log Analytics + App Insights, alerts for the
+worker and dead man's switch, the budget.
+
+**Switching an existing environment between profiles** is not an in-place
+update. `internal` and the workload-profile mode of a Container Apps
+environment are immutable and two environments cannot share a subnet, so the
+template names the environment by profile (`-cae` vs `-cae-lean`) and the
+switch is: delete the old environment and its apps (and the Front Door, whose
+private endpoint holds the environment), downgrade the registry
+(`az acr update --sku Basic` after removing its private endpoint, token, scope
+map, data endpoint and retention policy), run `bootstrap.sh`, then delete what
+Bicep no longer manages (Service Bus namespace, the Key Vault / Blob private
+endpoints, the four unused private DNS zones, the two edge alerts). Going back
+to standard is the reverse, plus `az acr update --sku Premium` first. Identities,
+Key Vault secrets and images survive either way.
+
 ## 3. DNS and Front Door
 
 From the bootstrap output:
@@ -111,7 +183,8 @@ registrars do not offer one. Use a subdomain.
 
 The web app is only reachable through Front Door. Optional hardening in the
 app: reject requests whose `X-Azure-FDID` header is not the `frontDoorId`
-output.
+output. (Standard profile only; there is no Front Door in lean, and no such
+header to check.)
 
 ## 4. First admin user
 
@@ -137,9 +210,11 @@ from inside:
     KV=$(az deployment group show -g rg-secureddy-prod -n rsec-prod-stage2 --query properties.outputs.keyVaultName.value -o tsv)
     PW=$(az keyvault secret show --vault-name $KV --name acr-chamber-pull-password --query value -o tsv)
 
+    USER=$(az deployment group show -g rg-secureddy-prod -n rsec-prod-stage2 --query properties.outputs.acrChamberPullUsername.value -o tsv)
+
     az container create -g rg-secureddy-prod-detonations -n nsg-probe \
       --image $ACR/reddysec-chamber:latest --registry-login-server $ACR \
-      --registry-username chamber-pull --registry-password "$PW" \
+      --registry-username "$USER" --registry-password "$PW" \
       --subnet $SUBNET --restart-policy Never --cpu 1 --memory 1 --os-type Linux \
       --command-line "/opt/venv/bin/python -c \"
     import socket, urllib.request
@@ -234,11 +309,11 @@ the code reads them.
 | `RS_ENV`, `RS_BASE_URL`, `RS_LOG_LEVEL` | `prod`, `https://app.<domain>`, `INFO` | used |
 | `RS_SECRET_KEY`, `RS_TOKEN_KEK`, `RS_DATABASE_URL`, `RS_GOOGLE_CLIENT_ID`, `RS_GOOGLE_CLIENT_SECRET`, `RS_GOOGLE_PUBSUB_TOPIC` | Key Vault references / params | used |
 | `RS_SANDBOX_BACKEND=aci`, `RS_ACI_SUBSCRIPTION_ID`, `RS_ACI_RESOURCE_GROUP`, `RS_ACI_LOCATION`, `RS_ACI_SUBNET_ID`, `RS_CHAMBER_IMAGE` | worker only | used by `chamber/backends` |
-| `RS_ACI_REGISTRY_SERVER`, `RS_ACI_REGISTRY_USERNAME`, `RS_ACI_REGISTRY_PASSWORD` | worker only, pull token for the chamber image | ready (section 6) |
+| `RS_ACI_REGISTRY_SERVER`, `RS_ACI_REGISTRY_USERNAME`, `RS_ACI_REGISTRY_PASSWORD` | worker only, pull credential for the chamber image (scoped token; ACR admin user in lean) | ready (section 6) |
 | `AZURE_CLIENT_ID` | the app's user-assigned identity client id | used by `DefaultAzureCredential` |
 | `RS_PUBSUB_TOKEN` | shared token in the Gmail push URL | ready |
 | `RS_STORAGE_ACCOUNT_URL`, `RS_ARTIFACTS_CONTAINER`, `RS_QUARANTINE_CONTAINER` | `https://<account>.blob.core.windows.net`, `artifacts`, `quarantine-originals` | ready: there is no Blob `ArtifactStore` yet |
-| `RS_SERVICEBUS_NAMESPACE`, `RS_SERVICEBUS_QUEUE_DETONATIONS`, `RS_SERVICEBUS_QUEUE_NOTIFICATIONS` | `<ns>.servicebus.windows.net`, `detonations`, `notifications` | ready: no Service Bus `JobQueue` yet |
+| `RS_SERVICEBUS_NAMESPACE`, `RS_SERVICEBUS_QUEUE_DETONATIONS`, `RS_SERVICEBUS_QUEUE_NOTIFICATIONS` | `<ns>.servicebus.windows.net`, `detonations`, `notifications`; empty strings in lean | ready: no Service Bus `JobQueue` yet |
 | `RS_HOLD_DEAD_MAN_MINUTES`, `RS_DETONATION_TIMEOUT_S`, `RS_DETONATION_MAX_CONCURRENCY`, `RS_INTEL_ONLINE=true`, `RS_DEV_LOGIN_ENABLED=false` | from the bicepparam | used |
 | `RS_TOKEN_KEK_PREVIOUS` | only during a KEK rotation (section 7) | ready |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | workspace-based App Insights | ready |
@@ -314,13 +389,14 @@ workflow** (choose environment, optionally "apps only").
 
 | Toggle | Where | Saves |
 |--------|-------|-------|
+| `costProfile = 'lean'` | bicepparam (dev only) | ~USD 550/mo: no Front Door, no environment meters, no Service Bus, ACR Basic, 3 fewer private endpoints. Section 2a lists what you give up. |
 | `postgresHighAvailability = false`, Burstable SKU | bicepparam | ~USD 280/mo |
 | `deployAppsNatGateway = false` | bicepparam | ~USD 36/mo (platform egress IP becomes dynamic) |
 | `webMinReplicas = 1` | bicepparam | ~USD 45/mo (no zero-downtime deploys) |
 | `logRetentionDays = 30`, `logDailyQuotaGb = 2` | bicepparam | ingestion/retention |
 | `zoneRedundant = false` | bicepparam | ACR/Storage/ACA zone redundancy, small |
 | Slimmer chamber image (`python:3.12-slim` + `playwright install chromium`) | docker/ | halves per-detonation pull cost and start-up time |
-| Front Door Standard instead of Premium | not supported by this template | USD 295/mo, but loses managed WAF rules, bot manager and Private Link; would need a public origin |
+| Front Door Standard instead of Premium | not supported by this template | USD 295/mo, but loses managed WAF rules, bot manager and Private Link; would need a public origin. For dev, `costProfile = 'lean'` drops the edge entirely instead. |
 
 See `cost-estimate.md` for the numbers.
 

@@ -6,6 +6,13 @@
 // (see edge.bicep). web is "external" only in the Container Apps sense: it is
 // published on the environment's internal load balancer.
 //
+// lean=true (dev cost profile): Consumption-only environment (no workload
+// profiles, so no environment-management or private-endpoint meters), external
+// with public ingress on the free *.azurecontainerapps.io certificate, no Front
+// Door in front of it, no Service Bus (the scale rule that watched the queue is
+// dropped; the worker runs a fixed replica count). RS_BASE_URL is computed from
+// the environment's default domain because the FQDN is only known after deploy.
+//
 // Secrets are Key Vault references resolved by each app's own managed
 // identity. The template never sees a secret value.
 //
@@ -26,8 +33,14 @@ param tags object = {}
 @allowed(['dev', 'staging', 'prod'])
 param envName string
 
-@description('Public base URL of the product (https://app.example.com). Used for OAuth redirects and links in notifications.')
-param baseUrl string
+@description('Public base URL of the product (https://app.example.com). Used for OAuth redirects and links in notifications. Empty in the lean profile = https://<web app FQDN>.')
+param baseUrl string = ''
+
+@description('Lean cost profile. See the header comment.')
+param lean bool = false
+
+@description('Deploy Service Bus env vars and the queue-length scale rule. False in the lean profile (no namespace).')
+param useServiceBus bool = true
 
 param zoneRedundant bool = false
 
@@ -57,14 +70,16 @@ param storageBlobEndpoint string
 param artifactsContainer string
 param quarantineContainer string
 
-param serviceBusNamespaceName string
-param serviceBusNamespaceFqdn string
-param detonationsQueueName string
-param notificationsQueueName string
+param serviceBusNamespaceName string = ''
+param serviceBusNamespaceFqdn string = ''
+param detonationsQueueName string = ''
+param notificationsQueueName string = ''
 
 param detonationResourceGroupName string
 param detonationSubnetId string
-param acrChamberPullTokenName string
+
+@description('Username the detonation container groups pull the chamber image with (repository-scoped token, or the ACR admin user in the lean profile). The password is the Key Vault secret acr-chamber-pull-password either way.')
+param acrChamberPullUsername string
 
 param webMinReplicas int = 2
 param webMaxReplicas int = 10
@@ -99,6 +114,12 @@ param tokenKekPreviousVersion string = ''
 var useDedicated = !empty(dedicatedWorkloadProfileType)
 var appProfileName = useDedicated ? 'dedicated' : 'Consumption'
 
+// The environment name carries the profile: 'internal' and workload-profile
+// mode are immutable, so switching profiles means a new environment next to
+// the old one rather than an in-place update.
+var environmentName = lean ? '${namePrefix}-cae-lean' : '${namePrefix}-cae'
+var webAppName = '${namePrefix}-web'
+
 var workloadProfiles = concat(
   [
     {
@@ -122,26 +143,47 @@ var workloadProfiles = concat(
 // Environment
 // ---------------------------------------------------------------------------
 
-resource managedEnv 'Microsoft.App/managedEnvironments@2025-07-01' = {
-  name: '${namePrefix}-cae'
-  location: location
-  tags: tags
-  properties: {
-    appLogsConfiguration: {
-      destination: 'azure-monitor'
-    }
-    vnetConfiguration: {
-      infrastructureSubnetId: appsSubnetId
-      internal: true
-    }
-    workloadProfiles: workloadProfiles
-    zoneRedundant: zoneRedundant
-    publicNetworkAccess: 'Disabled'
-    peerTrafficConfiguration: {
-      encryption: { enabled: true }
-    }
+// Consumption-only (lean) environments reject workloadProfiles and peer
+// traffic encryption, and need a /23 subnet delegated to Microsoft.App/environments
+// (network.bicep; the same delegation serves both environment types).
+var standardEnvProperties = {
+  appLogsConfiguration: {
+    destination: 'azure-monitor'
+  }
+  vnetConfiguration: {
+    infrastructureSubnetId: appsSubnetId
+    internal: true
+  }
+  workloadProfiles: workloadProfiles
+  zoneRedundant: zoneRedundant
+  publicNetworkAccess: 'Disabled'
+  peerTrafficConfiguration: {
+    encryption: { enabled: true }
   }
 }
+
+var leanEnvProperties = {
+  appLogsConfiguration: {
+    destination: 'azure-monitor'
+  }
+  vnetConfiguration: {
+    infrastructureSubnetId: appsSubnetId
+    internal: false
+  }
+  zoneRedundant: false
+  publicNetworkAccess: 'Enabled'
+}
+
+resource managedEnv 'Microsoft.App/managedEnvironments@2025-07-01' = {
+  name: environmentName
+  location: location
+  tags: tags
+  properties: lean ? leanEnvProperties : standardEnvProperties
+}
+
+// lean: https://rsec-dev-web.<default domain>; the web app below is named
+// webAppName, so this is its FQDN.
+var effectiveBaseUrl = empty(baseUrl) ? 'https://${webAppName}.${managedEnv.properties.defaultDomain}' : baseUrl
 
 resource environmentDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'to-law'
@@ -161,7 +203,7 @@ func kvRef(vaultUri string, secretName string) string => '${vaultUri}secrets/${s
 
 var commonEnv = [
   { name: 'RS_ENV', value: envName }
-  { name: 'RS_BASE_URL', value: baseUrl }
+  { name: 'RS_BASE_URL', value: effectiveBaseUrl }
   { name: 'RS_LOG_LEVEL', value: logLevel }
   { name: 'RS_SECRET_KEY', secretRef: 'rs-secret-key' }
   { name: 'RS_TOKEN_KEK', secretRef: 'rs-token-kek' }
@@ -173,9 +215,10 @@ var commonEnv = [
   { name: 'RS_STORAGE_ACCOUNT_URL', value: storageBlobEndpoint }
   { name: 'RS_ARTIFACTS_CONTAINER', value: artifactsContainer }
   { name: 'RS_QUARANTINE_CONTAINER', value: quarantineContainer }
-  { name: 'RS_SERVICEBUS_NAMESPACE', value: serviceBusNamespaceFqdn }
-  { name: 'RS_SERVICEBUS_QUEUE_DETONATIONS', value: detonationsQueueName }
-  { name: 'RS_SERVICEBUS_QUEUE_NOTIFICATIONS', value: notificationsQueueName }
+  // empty strings when useServiceBus=false (lean)
+  { name: 'RS_SERVICEBUS_NAMESPACE', value: useServiceBus ? serviceBusNamespaceFqdn : '' }
+  { name: 'RS_SERVICEBUS_QUEUE_DETONATIONS', value: useServiceBus ? detonationsQueueName : '' }
+  { name: 'RS_SERVICEBUS_QUEUE_NOTIFICATIONS', value: useServiceBus ? notificationsQueueName : '' }
   { name: 'RS_HOLD_DEAD_MAN_MINUTES', value: string(holdDeadManMinutes) }
   { name: 'RS_INTEL_ONLINE', value: 'true' }
   { name: 'RS_DEV_LOGIN_ENABLED', value: 'false' }
@@ -274,7 +317,7 @@ var httpProbes = [
 // ---------------------------------------------------------------------------
 
 resource web 'Microsoft.App/containerApps@2025-07-01' = {
-  name: '${namePrefix}-web'
+  name: webAppName
   location: location
   tags: union(tags, { 'reddysec-role': 'web' })
   identity: {
@@ -283,7 +326,7 @@ resource web 'Microsoft.App/containerApps@2025-07-01' = {
   }
   properties: {
     environmentId: managedEnv.id
-    workloadProfileName: appProfileName
+    workloadProfileName: lean ? null : appProfileName
     configuration: {
       activeRevisionsMode: 'Single'
       maxInactiveRevisions: 5
@@ -305,7 +348,8 @@ resource web 'Microsoft.App/containerApps@2025-07-01' = {
         {
           name: 'web'
           image: appImage
-          command: ['reddysec', 'web']
+          // The CLI binds 127.0.0.1 by default; ingress (Envoy) connects over the pod network.
+          command: ['reddysec', 'web', '--host', '0.0.0.0', '--port', '8000']
           resources: { cpu: 1, memory: '2Gi' }
           env: concat(commonEnv, optionalEnv, [
             { name: 'AZURE_CLIENT_ID', value: webClientId }
@@ -343,7 +387,7 @@ resource worker 'Microsoft.App/containerApps@2025-07-01' = {
   }
   properties: {
     environmentId: managedEnv.id
-    workloadProfileName: appProfileName
+    workloadProfileName: lean ? null : appProfileName
     configuration: {
       activeRevisionsMode: 'Single'
       maxInactiveRevisions: 5
@@ -368,9 +412,9 @@ resource worker 'Microsoft.App/containerApps@2025-07-01' = {
             { name: 'RS_ACI_LOCATION', value: location }
             { name: 'RS_ACI_SUBNET_ID', value: detonationSubnetId }
             { name: 'RS_CHAMBER_IMAGE', value: chamberImage }
-            // pull credentials for the private registry (repository-scoped token)
+            // pull credentials for the registry (repository-scoped token; ACR admin user in lean)
             { name: 'RS_ACI_REGISTRY_SERVER', value: acrLoginServer }
-            { name: 'RS_ACI_REGISTRY_USERNAME', value: acrChamberPullTokenName }
+            { name: 'RS_ACI_REGISTRY_USERNAME', value: acrChamberPullUsername }
             { name: 'RS_ACI_REGISTRY_PASSWORD', secretRef: 'acr-chamber-pull-password' }
           ])
         }
@@ -378,20 +422,23 @@ resource worker 'Microsoft.App/containerApps@2025-07-01' = {
       scale: {
         minReplicas: workerMinReplicas
         maxReplicas: workerMaxReplicas
-        rules: [
-          {
-            name: 'detonations-queue'
-            custom: {
-              type: 'azure-servicebus'
-              metadata: {
-                queueName: detonationsQueueName
-                namespace: serviceBusNamespaceName
-                messageCount: string(workerQueueLengthPerReplica)
+        // No rules without Service Bus: the worker stays at workerMinReplicas.
+        rules: useServiceBus
+          ? [
+              {
+                name: 'detonations-queue'
+                custom: {
+                  type: 'azure-servicebus'
+                  metadata: {
+                    queueName: detonationsQueueName
+                    namespace: serviceBusNamespaceName
+                    messageCount: string(workerQueueLengthPerReplica)
+                  }
+                  identity: workerIdentityId
+                }
               }
-              identity: workerIdentityId
-            }
-          }
-        ]
+            ]
+          : []
       }
     }
   }
@@ -411,7 +458,7 @@ resource deadman 'Microsoft.App/containerApps@2025-07-01' = {
   }
   properties: {
     environmentId: managedEnv.id
-    workloadProfileName: appProfileName
+    workloadProfileName: lean ? null : appProfileName
     configuration: {
       activeRevisionsMode: 'Single'
       maxInactiveRevisions: 3
@@ -444,6 +491,7 @@ output environmentName string = managedEnv.name
 output environmentDefaultDomain string = managedEnv.properties.defaultDomain
 output environmentStaticIp string = managedEnv.properties.staticIp
 output webFqdn string = web.properties.configuration.ingress.fqdn
+output baseUrl string = effectiveBaseUrl
 output webAppId string = web.id
 output webAppName string = web.name
 output workerAppId string = worker.id

@@ -135,6 +135,11 @@ worker:
 Put a calendar reminder at 11 months. (Policy denies giving the container
 group an identity, so a token it is.)
 
+Lean profile (dev): there is no token; the secret holds the ACR admin
+password, which does not expire. If someone regenerates it
+(`az acr credential renew`), re-run `bootstrap.sh dev --skip-images`, which
+copies the live password into Key Vault, then restart the worker.
+
 **Dead-letter queue** growing: `az servicebus queue show ... --query countDetails.deadLetterMessageCount`.
 Peek with Service Bus Explorer in the portal. Dead-letters are jobs that failed
 3 times; the message id is the detonation job id. Usually a target that hangs

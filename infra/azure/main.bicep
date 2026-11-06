@@ -11,6 +11,9 @@
 //      then: seed Key Vault secrets, build + push the images
 //   2. deployApps=true   -> Container Apps, Front Door, alerts
 // Later runs always use deployApps=true.
+//
+// costProfile=lean (dev) drops Front Door, Service Bus and most private
+// endpoints; see the parameter description and docs/azure-deploy.md.
 
 targetScope = 'resourceGroup'
 
@@ -43,11 +46,23 @@ param tags object = {
 @description('Deploy the application tier (Container Apps, Front Door, alerts). False for the first bootstrap pass.')
 param deployApps bool = true
 
+@description('''Cost profile.
+  standard  prod shape: Front Door Premium + WAF, internal workload-profile Container Apps
+            environment, private endpoints for Key Vault / Blob / ACR / Postgres, Service Bus,
+            ACR Premium with a repository-scoped pull token.
+  lean      dev shape (~USD 150/month list): no Front Door, external Consumption-only Container
+            Apps environment on the free *.azurecontainerapps.io certificate, no Service Bus,
+            Key Vault / Blob / ACR on their public endpoints (RBAC / identity auth only),
+            ACR Basic with the admin user as the chamber pull credential. Postgres keeps its
+            private endpoint. See docs/azure-deploy.md "Cost profiles" for the trade-offs.''')
+@allowed(['standard', 'lean'])
+param costProfile string = 'standard'
+
 @description('Assign the detonation policies. Needs policy rights at subscription scope.')
 param deployPolicy bool = true
 
-@description('Public base URL of the product. With a custom domain: https://app.example.com')
-param baseUrl string
+@description('Public base URL of the product. With a custom domain: https://app.example.com. Empty in the lean profile = https://<web app FQDN>, computed inside the template.')
+param baseUrl string = ''
 
 @description('Custom domain for Front Door (app.example.com). Empty = *.azurefd.net only.')
 param customDomain string = ''
@@ -158,6 +173,12 @@ var sbName = empty(serviceBusNamespaceName) ? 'sb-${prefix}-${envName}-${suffix}
 
 var allTags = union(tags, { env: envName })
 
+var lean = costProfile == 'lean'
+// Front Door and Service Bus exist only in the standard profile.
+var deployEdge = deployApps && !lean
+var deployServiceBus = !lean
+// Postgres stays private in every profile (its server has public access disabled).
+
 // ---------------------------------------------------------------------------
 // Foundation
 // ---------------------------------------------------------------------------
@@ -195,7 +216,8 @@ module network 'modules/network.bicep' = {
     dataSubnetPrefix: dataSubnetPrefix
     detonationSubnetPrefix: detonationSubnetPrefix
     acrPrivateEndpointIps: acrPrivateEndpointIps
-    deployAppsNatGateway: deployAppsNatGateway
+    deployAppsNatGateway: deployAppsNatGateway && !lean
+    lean: lean
     workerPrincipalId: identity.outputs.workerPrincipalId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
   }
@@ -217,6 +239,7 @@ module keyVault 'modules/keyvault.bicep' = {
     dataSubnetId: network.outputs.dataSubnetId
     privateDnsZoneId: network.outputs.keyVaultDnsZoneId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    lean: lean
   }
 }
 
@@ -262,10 +285,11 @@ module storage 'modules/storage.bicep' = {
     dataSubnetId: network.outputs.dataSubnetId
     privateDnsZoneId: network.outputs.blobDnsZoneId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    lean: lean
   }
 }
 
-module serviceBus 'modules/servicebus.bicep' = {
+module serviceBus 'modules/servicebus.bicep' = if (deployServiceBus) {
   name: 'servicebus'
   params: {
     location: location
@@ -299,6 +323,7 @@ module acr 'modules/acr.bicep' = {
     dataSubnetId: network.outputs.dataSubnetId
     privateDnsZoneId: network.outputs.acrDnsZoneId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    lean: lean
   }
 }
 
@@ -351,6 +376,8 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
     tags: allTags
     envName: envName
     baseUrl: baseUrl
+    lean: lean
+    useServiceBus: deployServiceBus
     zoneRedundant: zoneRedundant
     dedicatedWorkloadProfileType: dedicatedWorkloadProfileType
     appsSubnetId: network.outputs.appsSubnetId
@@ -369,13 +396,13 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
     storageBlobEndpoint: storage.outputs.blobEndpoint
     artifactsContainer: storage.outputs.artifactsContainer
     quarantineContainer: storage.outputs.quarantineContainer
-    serviceBusNamespaceName: serviceBus.outputs.namespaceName
-    serviceBusNamespaceFqdn: serviceBus.outputs.namespaceFqdn
-    detonationsQueueName: serviceBus.outputs.detonationsQueueName
-    notificationsQueueName: serviceBus.outputs.notificationsQueueName
+    serviceBusNamespaceName: serviceBus.?outputs.?namespaceName ?? ''
+    serviceBusNamespaceFqdn: serviceBus.?outputs.?namespaceFqdn ?? ''
+    detonationsQueueName: serviceBus.?outputs.?detonationsQueueName ?? ''
+    notificationsQueueName: serviceBus.?outputs.?notificationsQueueName ?? ''
     detonationResourceGroupName: detonationResourceGroupName
     detonationSubnetId: network.outputs.detonationSubnetId
-    acrChamberPullTokenName: acr.outputs.chamberPullTokenName
+    acrChamberPullUsername: acr.outputs.chamberPullUsername
     webMinReplicas: webMinReplicas
     webMaxReplicas: webMaxReplicas
     workerMinReplicas: workerMinReplicas
@@ -401,7 +428,7 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
   dependsOn: [detonationRg]
 }
 
-module edge 'modules/edge.bicep' = if (deployApps) {
+module edge 'modules/edge.bicep' = if (deployEdge) {
   name: 'edge'
   params: {
     location: location
@@ -444,13 +471,15 @@ output keyVaultName string = keyVault.outputs.keyVaultName
 output keyVaultUri string = keyVault.outputs.keyVaultUri
 output acrName string = acr.outputs.registryName
 output acrLoginServer string = acr.outputs.loginServer
-output acrChamberPullTokenName string = acr.outputs.chamberPullTokenName
+output acrChamberPullUsername string = acr.outputs.chamberPullUsername
+output acrAdminUserEnabled bool = acr.outputs.adminUserEnabled
+output costProfile string = costProfile
 output postgresServerName string = postgres.outputs.serverName
 output postgresFqdn string = postgres.outputs.serverFqdn
 output postgresDatabase string = postgres.outputs.databaseName
 output postgresAdministratorLogin string = postgres.outputs.administratorLogin
 output storageAccountName string = storage.outputs.storageAccountName
-output serviceBusNamespace string = serviceBus.outputs.namespaceName
+output serviceBusNamespace string = serviceBus.?outputs.?namespaceName ?? ''
 output detonationEgressIps array = network.outputs.detonationEgressIps
 output appsEgressIp string = network.outputs.appsEgressIp
 output detonationSubnetId string = network.outputs.detonationSubnetId
@@ -459,6 +488,7 @@ output deployIdentityClientId string = identity.outputs.deployClientId
 output workerIdentityClientId string = identity.outputs.workerClientId
 output containerAppsEnvironmentId string = containerApps.?outputs.?environmentId ?? ''
 output webFqdn string = containerApps.?outputs.?webFqdn ?? ''
+output baseUrl string = containerApps.?outputs.?baseUrl ?? baseUrl
 output webAppName string = containerApps.?outputs.?webAppName ?? ''
 output workerAppName string = containerApps.?outputs.?workerAppName ?? ''
 output deadmanAppName string = containerApps.?outputs.?deadmanAppName ?? ''
