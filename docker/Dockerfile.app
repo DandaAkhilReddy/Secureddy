@@ -31,10 +31,10 @@ COPY src ./src
 # asyncpg is the PostgreSQL driver for the production RS_DATABASE_URL
 # (postgresql+asyncpg://...). It is installed here until it lands in
 # pyproject's "azure" extra.
-RUN python -m venv /opt/venv \
+RUN python -m venv --without-pip /opt/venv && curl -sS https://bootstrap.pypa.io/get-pip.py | /opt/venv/bin/python - --quiet \
     && printf 'playwright==1.63.0\n' > /tmp/constraints.txt \
     && /opt/venv/bin/pip install --constraint /tmp/constraints.txt ".[azure]" "asyncpg==0.30.0" \
-    && /opt/venv/bin/python -c "import playwright, reddysec; print('playwright', playwright.__version__)"
+    && /opt/venv/bin/python -c "import playwright, reddysec; print('ok')"
 
 # ---------------------------------------------------------------------------
 # runtime

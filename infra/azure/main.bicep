@@ -21,6 +21,9 @@ targetScope = 'resourceGroup'
 @description('Azure region for everything regional.')
 param location string = resourceGroup().location
 
+@description('Region for PostgreSQL. Some subscriptions are blocked from provisioning Postgres in their main region; a private endpoint in the VNet reaches it from any region.')
+param postgresLocation string = location
+
 @allowed(['dev', 'staging', 'prod'])
 param envName string
 
@@ -224,7 +227,8 @@ module keyVault 'modules/keyvault.bicep' = {
 module postgres 'modules/postgres.bicep' = {
   name: 'postgres'
   params: {
-    location: location
+    location: postgresLocation
+    privateEndpointLocation: location
     namePrefix: namePrefix
     tags: allTags
     serverName: pgName

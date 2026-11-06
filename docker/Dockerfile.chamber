@@ -37,10 +37,10 @@ COPY src ./src
 
 # Core dependencies only: no azure extra, no dev tools. Playwright pinned to
 # the version whose browsers are baked into the base image.
-RUN python -m venv /opt/venv \
+RUN python -m venv --without-pip /opt/venv && curl -sS https://bootstrap.pypa.io/get-pip.py | /opt/venv/bin/python - --quiet \
     && printf 'playwright==1.63.0\n' > /tmp/constraints.txt \
     && /opt/venv/bin/pip install --constraint /tmp/constraints.txt "." \
-    && /opt/venv/bin/python -m compileall -q /opt/venv/lib \
+    && /opt/venv/bin/python -m compileall -q -x "olefile2" /opt/venv/lib \
     && /opt/venv/bin/python -c "import reddysec, playwright"
 
 # ---------------------------------------------------------------------------

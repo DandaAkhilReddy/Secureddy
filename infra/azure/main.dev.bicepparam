@@ -3,9 +3,10 @@
 using './main.bicep'
 
 param envName = 'dev'
-param location = 'westus2'
+param location = 'eastus'
+param postgresLocation = 'centralus'
 param prefix = 'rsec'
-param detonationResourceGroupName = 'rg-secureddy-dev-detonations'
+param detonationResourceGroupName = 'Secureddy-detonations'
 
 // CHANGE: the *.azurefd.net host is printed by the first deployment; put it here
 // (or your dev domain) so OAuth redirects and notification links are right.

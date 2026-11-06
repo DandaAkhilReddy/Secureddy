@@ -9,6 +9,9 @@
 // later deployments omit it so the server keeps whatever is in Key Vault.
 
 param location string
+
+@description('Region of the VNet; a private endpoint must live where its subnet lives, even when the server is elsewhere.')
+param privateEndpointLocation string = location
 param namePrefix string
 param tags object = {}
 
@@ -118,7 +121,7 @@ resource entraAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@20
 module privateEndpoint 'private-endpoint.bicep' = {
   name: '${serverName}-pe'
   params: {
-    location: location
+    location: privateEndpointLocation
     tags: tags
     name: '${namePrefix}-pe-postgres'
     subnetId: dataSubnetId

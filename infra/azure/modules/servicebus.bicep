@@ -32,7 +32,7 @@ param logAnalyticsWorkspaceId string
 
 var isPremium = sku == 'Premium'
 
-var dataOwnerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '090c5cfd-751d-41dc-a11b-9f4cf2a2f1b2')
+var dataOwnerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '090c5cfd-751d-490a-894a-3ce6f1109419')
 var dataSenderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 
 resource namespace 'Microsoft.ServiceBus/namespaces@2024-01-01' = {

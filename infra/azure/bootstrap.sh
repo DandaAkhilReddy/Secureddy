@@ -97,7 +97,8 @@ OPERATOR_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
 OPERATOR_UPN="$(az ad signed-in-user show --query userPrincipalName -o tsv 2>/dev/null || true)"
 [[ -n "$OPERATOR_ID" ]] || warn "could not resolve the signed-in user; Postgres Entra admin and operator Key Vault access will be skipped"
 
-MY_IP="$(curl -fsS --max-time 10 https://api.ipify.org || true)"
+# OPERATOR_CIDR overrides the detected address (useful behind a proxy pool).
+MY_IP="${OPERATOR_CIDR:-$(curl -fsS --max-time 10 https://api.ipify.org || true)}"
 if [[ "$LOCKDOWN" == "1" ]]; then
   ADMIN_IPS='[]'
   warn "lockdown: Key Vault public endpoint will be disabled after this run"
