@@ -118,7 +118,7 @@ class GoogleCredentials(BaseModel):
 
 
 def verdict_label_plan(
-    level: VerdictLevel, policy: PolicyConfig, label_ids: dict[str, str], *, hold: bool
+    level: VerdictLevel, policy: PolicyConfig, label_ids: dict[str, str], *, hold: bool, relabel: bool = False
 ) -> tuple[list[str], list[str]]:
     """Which label ids to add/remove for a verdict. Pure, so it is easy to test
     every level x mode x policy combination.
@@ -146,6 +146,10 @@ def verdict_label_plan(
             add.append(label_ids[LABEL_QUARANTINE])
     elif hold:
         add.append(INBOX)
+    if relabel:
+        # A re-check replaces the earlier verdict word; Quarantine and
+        # "Released by you" are about where the message is, so they stay.
+        remove.extend(label_ids[name] for name in (LABEL_SAFE, LABEL_SUSPICIOUS) if label_ids[name] not in add)
     return add, remove
 
 
@@ -403,12 +407,16 @@ class GmailConnector:
         body = await self._request("GET", f"messages/{provider_message_id}", params={"format": "raw"})
         return _decode_raw(body)
 
-    async def apply_verdict(self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig) -> None:
+    async def apply_verdict(
+        self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False
+    ) -> None:
         # Either the connector (mailbox row) or the policy saying HOLD wins: the
         # cost of a redundant INBOX add is nil, the cost of leaving a held
         # message in "Checking" is trapped mail.
         hold = self.mode is ProtectionMode.HOLD or policy.mode is ProtectionMode.HOLD
-        add, remove = verdict_label_plan(verdict.level, policy, await self._label_ids(), hold=hold)
+        add, remove = verdict_label_plan(
+            verdict.level, policy, await self._label_ids(), hold=hold, relabel=relabel
+        )
         await self._modify(msg.provider_message_id, add=add, remove=remove)
 
     async def release(self, provider_message_id: str) -> None:
@@ -425,6 +433,14 @@ class GmailConnector:
         labels = await self._label_ids()
         await self._modify(
             provider_message_id, add=[INBOX, labels[LABEL_RELEASED]], remove=[labels[LABEL_QUARANTINE]]
+        )
+
+    async def mark_safe(self, provider_message_id: str) -> None:
+        labels = await self._label_ids()
+        await self._modify(
+            provider_message_id,
+            add=[labels[LABEL_SAFE], INBOX],
+            remove=[labels[LABEL_SUSPICIOUS], labels[LABEL_QUARANTINE], labels[LABEL_PENDING]],
         )
 
     async def release_all_pending(self) -> int:

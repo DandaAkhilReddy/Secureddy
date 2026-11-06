@@ -1,6 +1,6 @@
 """Shared contracts. Import from here, not from the submodules."""
 
-from .accounts import Mailbox, MailboxStatus, PolicyConfig, Principal, Role, SenderHistory
+from .accounts import ClientFeedback, Mailbox, MailboxStatus, PolicyConfig, Principal, Role, SenderHistory
 from .jobs import (
     DetonationJob,
     DetonationKind,
@@ -45,6 +45,7 @@ __all__ = [
     "Attachment",
     "AttachmentVerdict",
     "AuthResults",
+    "ClientFeedback",
     "DetonationJob",
     "DetonationKind",
     "DetonationProfile",

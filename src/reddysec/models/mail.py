@@ -78,6 +78,9 @@ class AuthResults(BaseModel):
     dmarc: str | None = None
     dkim_domain: str | None = None
     aligned: bool | None = None  # DKIM/SPF domain aligns with From domain
+    # The ``header.from`` the DMARC verdict was computed for, when the receiver
+    # recorded it. A DMARC pass only vouches for this domain.
+    dmarc_from: str | None = None
     raw: str | None = None
 
 

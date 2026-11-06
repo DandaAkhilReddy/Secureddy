@@ -1,0 +1,20 @@
+# Link shorteners owned by one company that only ever redirect to that
+# company's own sites (Walmart's w-mt.co, Amazon's a.co). Unlike public
+# shorteners (bit.ly, t.co, lnkd.in), nobody else can make them point at an
+# attacker's page, so they do not "hide where the link really goes".
+#
+# They count as popular domains and do not raise the "shortened link" signal.
+# Public shorteners stay in shorteners.txt. If unsure, leave a domain out.
+#
+# One registrable domain per line, sorted; '#' starts a comment.
+a.co
+aka.ms
+amzn.to
+apple.co
+g.co
+goo.gl
+nyti.ms
+spoti.fi
+w-mt.co
+wapo.st
+youtu.be

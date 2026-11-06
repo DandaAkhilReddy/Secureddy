@@ -32,10 +32,19 @@
   </div>
 </section>
 {% else %}
-<section class="stats" aria-label="This week">
-  <div class="stat"><span class="stat-value">{{ counts.checked }}</span><span class="stat-label">Checked this week</span></div>
-  <div class="stat stat-warn"><span class="stat-value">{{ counts.suspicious }}</span><span class="stat-label">Suspicious</span></div>
-  <div class="stat stat-bad"><span class="stat-value">{{ counts.quarantined }}</span><span class="stat-label">In Quarantine</span></div>
+<section aria-labelledby="stats-title">
+  <h2 id="stats-title" class="sr-only">This week</h2>
+  <ul class="stats">
+    {% for card in stat_cards %}
+    <li>
+      <a class="stat stat-link stat-{{ card.tone }}" href="{{ card.href }}" aria-label="{{ card.aria }}">
+        <span class="stat-value">{{ card.count }}</span>
+        <span class="stat-label">{{ card.label }}</span>
+        <span class="stat-hint">{{ card.hint }} <span aria-hidden="true">&rarr;</span></span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
 </section>
 {% endif %}
 

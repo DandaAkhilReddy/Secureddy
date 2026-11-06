@@ -1,0 +1,35 @@
+Delivered-To: client@gmail.com
+Received: from mta1.email.summitoutfitters.com (mta1.email.summitoutfitters.com. [199.15.225.40]) by mx.google.com with ESMTPS id p8si; Thu, 05 Nov 2026 14:20:11 -0800 (PST)
+Return-Path: <msprvs1=20769Ab3Cd=bounces-280172-1853@bounces.summitoutfitters.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@email.summitoutfitters.com header.s=scph1024 header.b=Xy7Wq1;
+       spf=pass (google.com: domain of msprvs1=20769ab3cd=bounces-280172-1853@bounces.summitoutfitters.com designates 199.15.225.40 as permitted sender) smtp.mailfrom="msprvs1=20769Ab3Cd=bounces-280172-1853@bounces.summitoutfitters.com";
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=email.summitoutfitters.com
+X-MSFBL: ZmljdGlvbmFsLWZpeHR1cmUtaGVhZGVy
+X-Campaign-ID: 19700001
+Feedback-ID: 25800001:19700001:104400:iterable
+List-Unsubscribe: <https://www.summitoutfitters.com/consent-preferences?h=9f8e7d6c5b4a39281706f5e4d3c2b1a0&r=1>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+Reply-To: noreply@summitoutfitters.com
+Subject: So much happening near you this weekend!
+From: Summit Outfitters Bellevue <store_email@email.summitoutfitters.com>
+To: client@gmail.com
+Date: Thu, 05 Nov 2026 22:20:11 +0000
+Message-ID: <03.13.02918.B110DEA6@mta1vrest.sd.prd.sparkpost>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body>
+<h1>Your store this weekend</h1>
+<p>Free bike tune-up checks Saturday, 10am to 2pm. Urgent: spots fill up fast, reserve today!</p>
+<p><a href="https://mlinks.summitoutfitters.com/u/click?_t=6f1c2b8a9d0e4f3a&_m=a1b2c3d4e5f60718293a4b5c6d7e8f90">Reserve a spot</a></p>
+<p>Holiday shopping made easy. Give the gift of adventure: buy a gift card for the hiker on your list,
+we will email it with your note. <a href="https://mlinks.summitoutfitters.com/u/click?_t=8a9d0e4f3a6f1c2b&_m=0718293a4b5c6d7e8f90a1b2c3d4e5f6">Shop gift cards</a></p>
+<p>Members get 20% off one full-price item. Ends Sunday. <a href="https://www.summitoutfitters.com/membership">Learn more</a></p>
+<p><a href="https://mi.summitoutfitters.com/p/rp/3c2b1a0f9e8d7c6b.png?mi_u=4b5c6d7e8f90a1b2c3d4e5f607182930">Today's picks</a></p>
+<p>Follow us: <a href="https://www.instagram.com/summitoutfitters">Instagram</a> |
+<a href="https://www.facebook.com/summitoutfitters">Facebook</a></p>
+<p style="font-size:11px">Summit Outfitters, 100 Example Way, Kent, WA 98000.
+<a href="https://www.summitoutfitters.com/consent-preferences?h=9f8e7d6c5b4a39281706f5e4d3c2b1a0&r=1">Unsubscribe</a></p>
+</body></html>

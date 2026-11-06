@@ -53,9 +53,12 @@ class MailboxConnector(Protocol):
         """Full RFC 5322 bytes of one message."""
         ...
 
-    async def apply_verdict(self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig) -> None:
+    async def apply_verdict(
+        self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False
+    ) -> None:
         """Label the message by verdict; quarantine it if level >= policy.quarantine_at;
-        in HOLD mode move it from LABEL_PENDING to the inbox unless quarantined."""
+        in HOLD mode move it from LABEL_PENDING to the inbox unless quarantined.
+        ``relabel`` (re-checks) also removes a previous Checked/Suspicious label."""
         ...
 
     async def release(self, provider_message_id: str) -> None:
@@ -66,6 +69,12 @@ class MailboxConnector(Protocol):
 
     async def restore(self, provider_message_id: str) -> None:
         """Undo a quarantine at the client's request; adds LABEL_RELEASED."""
+        ...
+
+    async def mark_safe(self, provider_message_id: str) -> None:
+        """The client said "This is safe" (or a re-check found it safe): swap our
+        verdict label to LABEL_SAFE, drop Suspicious/Quarantine/Checking and make
+        sure the message is in the inbox. Idempotent."""
         ...
 
     async def release_all_pending(self) -> int:

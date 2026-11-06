@@ -1,0 +1,22 @@
+Delivered-To: client@gmail.com
+Received: from mail.secure-notices.net (mail.secure-notices.net. [45.61.140.22]) by mx.google.com with ESMTPS id t7si; Thu, 05 Nov 2026 07:44:10 -0800 (PST)
+Return-Path: <bounce@secure-notices.net>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@secure-notices.net header.s=s1 header.b=Gh5Jk7;
+       spf=pass (google.com: domain of bounce@secure-notices.net designates 45.61.140.22 as permitted sender) smtp.mailfrom=bounce@secure-notices.net;
+       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=secure-notices.net
+From: Account Notices <alerts@secure-notices.net>
+To: client@gmail.com
+Subject: Unusual sign-in to your account
+Date: Thu, 05 Nov 2026 07:44:01 -0800
+Message-ID: <a9f8e7d6@secure-notices.net>
+List-Unsubscribe: <mailto:unsubscribe@secure-notices.net>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body>
+<p>We noticed an unusual sign-in to your online banking.</p>
+<p>Please review it at <a href="https://acct-review-center.co/session/7Hq2Lm9Np4Rt6Vx8">www.chase.com/verify</a>
+within 24 hours or access will be limited.</p>
+</body></html>

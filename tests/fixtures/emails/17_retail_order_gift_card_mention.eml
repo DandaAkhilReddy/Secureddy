@@ -1,0 +1,41 @@
+Delivered-To: client@gmail.com
+Received: from m198-244-53-20.mailgun.net (m198-244-53-20.mailgun.net. [198.244.53.20]) by mx.google.com with ESMTPS id k3si; Thu, 05 Nov 2026 11:18:11 -0800 (PST)
+Return-Path: <bounce+1a2b3c.4d5e6f-client=gmail.com@prod.walmart.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@walmart.com header.s=s1 header.b=Q2x9aB;
+       spf=pass (google.com: domain of bounce+1a2b3c.4d5e6f-client=gmail.com@prod.walmart.com designates 198.244.53.20 as permitted sender) smtp.mailfrom="bounce+1a2b3c.4d5e6f-client=gmail.com@prod.walmart.com";
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=walmart.com
+X-Mailgun-Sid: WyJmaWN0aW9uYWwiLCJjbGllbnRAZ21haWwuY29tIl0=
+X-Feedback-Id: postmaster@prod.walmart.com::000000000000000000000000:mailgun
+Date: Thu, 05 Nov 2026 19:18:11 +0000
+Mime-Version: 1.0
+Subject: Thanks for your delivery order, Jordan
+From: "Walmart.com" <help@walmart.com>
+Reply-To: donotreply@walmart.com
+Sender: help@walmart.com
+To: client@gmail.com
+Message-Id: <20261105191811.0f1e2d3c4b5a6978@prod.walmart.com>
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body style="font-family:Arial,sans-serif">
+<p><a href="https://w-mt.co/q/Fk2Lq9ZpX7wN4vRt8YbC3d">Walmart</a></p>
+<h1>Thanks for your order, Jordan!</h1>
+<p>Order# 2000117-48213907 &middot; Delivery Thu, Nov 6, 2pm-3pm</p>
+<p>Delivery address: Jordan Ellis, 1200 Example Ave Apt 4, Springfield, WA 98000</p>
+<table>
+<tr><td>Great Value Whole Milk, 1 gal</td><td>Qty 1</td><td>$3.48</td></tr>
+<tr><td>Fresh Bananas, each</td><td>Qty 6</td><td>$1.62</td></tr>
+<tr><td>Walmart eGift Card, Holiday design</td><td>Qty 1</td><td>$25.00</td></tr>
+</table>
+<p>Subtotal $30.10 &middot; Delivery fee $0.00 &middot; Total $30.10</p>
+<p>Payment method: Gift card ending in 4417 ($10.00), Visa ending in 0921 ($20.10)</p>
+<p>Your eGift card will be emailed to the recipient. They can check the card number and PIN at checkout.</p>
+<p><a href="https://w-mt.co/q/Ab3Cd5Ef7Gh9Jk2Lm4Np6Q">View order details</a> &middot;
+<a href="https://w-mt.co/q/Zx8Cv6Bn4Mm2Lk9Jh7Gf5D">Track your delivery</a> &middot;
+<a href="https://w-mt.co/q/Qw1Er3Ty5Ui7Op9As2Df4G">Shop gift cards</a></p>
+<p>Need to make changes? You have until 11am to edit your order.
+<a href="https://w-mt.co/q/Hj6Kl8Zx1Cv3Bn5Mq7Wr9T">Edit order</a></p>
+<p style="font-size:11px;color:#666">Walmart.com, 702 SW 8th St, Bentonville, AR 72716.
+<a href="https://w-mt.co/q/Pl0Ok9Ij8Uh7Yg6Tf5Rd4E">Privacy policy</a></p>
+</body></html>

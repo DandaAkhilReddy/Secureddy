@@ -220,7 +220,10 @@ def summarize(
     }
     if any(s.code in impersonation_codes for s in meaningful):
         opener = f"This email pretends to be from {who}. "
-    reason = _fill(_REASONS.get(primary.code, "It shows signs of a scam ({host})"), primary, parsed)
+    template = _REASONS.get(primary.code, "It shows signs of a scam ({host})")
+    if primary.code == "url.display_mismatch" and primary.evidence.get("shown_domain") and primary.evidence.get("impersonates"):
+        template = "A link pretends to go to " + str(primary.evidence["shown_domain"]) + " but goes somewhere else"
+    reason = _fill(template, primary, parsed)
     reason = reason[0].upper() + reason[1:]
     second = ""
     for s in meaningful[1:]:

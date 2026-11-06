@@ -7,6 +7,12 @@ with an UNKNOWN verdict (unless the policy says to hold and page the
 concierge), and the dead man's switch covers the case where this process is
 not running at all.
 
+Client requests ("This is fake", "This is safe", "Check again") are recorded
+by the web app as message states and carried out here, because only the worker
+holds mailbox access. They are handled after new mail on every cycle, and
+re-checks are rationed (``RESCORES_PER_CYCLE``) so a "re-check last 7 days"
+can never starve the protection of new mail.
+
 Dependencies on the analysis and chamber packages are resolved lazily and are
 injectable, so this module is testable with fakes and can be imported before
 those packages exist.
@@ -31,6 +37,7 @@ from reddysec.mail.base import AuthExpired, ConnectorError, MailboxConnector
 from reddysec.mail.factory import ConnectorFactory, connector_factory_from_settings
 from reddysec.mail.gmail import should_quarantine
 from reddysec.models import (
+    ClientFeedback,
     ParsedMessage,
     PolicyConfig,
     ProtectionMode,
@@ -51,6 +58,7 @@ log = get_logger(__name__)
 
 MODE_KEY = "_mode"  # stored in mailbox.labels so a mode change re-runs setup
 SCAN_TIMEOUT_SLACK_S = 30
+RESCORES_PER_CYCLE = 10
 
 Parser = Callable[..., ParsedMessage]
 Analyzer = Callable[[ParsedMessage, Any], Awaitable[Verdict]]
@@ -64,6 +72,7 @@ class CycleStats:
     skipped: int = 0
     failed: int = 0
     restored: int = 0
+    client_requests: int = 0
     mailbox_errors: list[str] = field(default_factory=list)
 
 
@@ -343,6 +352,7 @@ class Worker:
                 await self._message_crashed(mailbox, connector, raw, exc)
 
         stats.restored += await self._handle_restore_requests(mailbox, connector)
+        stats.client_requests += await self._handle_client_requests(mailbox, connector)
 
         async with self._db.session() as session:
             await repo.update_cursor(session, mailbox.id, new_cursor)
@@ -360,6 +370,8 @@ class Worker:
         for row in requests:
             try:
                 await connector.restore(row.provider_message_id)
+                if repo.client_decision(row) == "safe":
+                    await connector.mark_safe(row.provider_message_id)
             except ConnectorError as exc:
                 if exc.retryable:
                     raise
@@ -385,6 +397,143 @@ class Worker:
             done += 1
         return done
 
+    async def _handle_client_requests(self, mailbox: MailboxRow, connector: MailboxConnector) -> int:
+        """Carry out "This is fake", "This is safe" and "Check again"."""
+        done = 0
+        async with self._db.session() as session:
+            fake = await repo.list_requests(session, mailbox.id, repo.STATE_QUARANTINE_REQUESTED)
+            safe = await repo.list_requests(session, mailbox.id, repo.STATE_RELABEL_SAFE_REQUESTED)
+            rescore = await repo.list_requests(
+                session, mailbox.id, repo.STATE_RESCORE_REQUESTED, limit=RESCORES_PER_CYCLE
+            )
+        for row in fake:
+            if await self._client_action(mailbox, row, "client_quarantine", connector.quarantine):
+                done += 1
+        for row in safe:
+            if await self._client_action(mailbox, row, "client_mark_safe", connector.mark_safe):
+                done += 1
+        feedback = await self._feedback(mailbox.id) if rescore else None
+        for row in rescore:
+            if await self._rescore(mailbox, connector, row, feedback or ClientFeedback()):
+                done += 1
+        return done
+
+    async def _client_action(
+        self, mailbox: MailboxRow, row: MessageRow, action: str, call: Callable[[str], Awaitable[None]]
+    ) -> bool:
+        try:
+            await call(row.provider_message_id)
+        except ConnectorError as exc:
+            if exc.retryable:
+                raise
+            async with self._db.session() as session:
+                fresh = await repo.get_message(session, row.id)
+                if fresh is not None:
+                    await repo.set_message_state(session, fresh, repo.STATE_DONE)
+                await repo.audit(
+                    session, None, "system", f"{action}_failed", mailbox.id, row.id, {"error": str(exc)[:500]}
+                )
+            return False
+        async with self._db.session() as session:
+            fresh = await repo.get_message(session, row.id)
+            if fresh is not None:
+                if action == "client_quarantine":
+                    await repo.mark_quarantined_by_client(session, fresh)
+                else:
+                    await repo.mark_relabeled_safe(session, fresh)
+            await repo.audit(session, None, "system", action, mailbox.id, row.id, {})
+        return True
+
+    async def _rescore(
+        self, mailbox: MailboxRow, connector: MailboxConnector, row: MessageRow, feedback: ClientFeedback
+    ) -> bool:
+        """Fetch the message again, analyse it with today's rules and the
+        client's feedback, swap its label, keep the old verdict as ``previous``.
+
+        Safety rules: a message only leaves Quarantine when the new verdict is
+        SAFE; anything else that was quarantined stays there. A failed re-check
+        keeps the old verdict and label.
+        """
+        policy = policy_for(mailbox)
+        try:
+            raw_bytes = await connector.fetch_raw(row.provider_message_id)
+        except ConnectorError as exc:
+            if exc.retryable:
+                raise
+            await self._rescore_failed(mailbox, row, f"fetch: {exc}")
+            return False
+        raw = RawMessage(
+            provider_message_id=row.provider_message_id,
+            mailbox_id=mailbox.id,
+            received_at=row.received_at,
+            raw=raw_bytes,
+            thread_id=row.thread_id,
+        )
+        try:
+            parsed = self.parser(
+                raw.raw,
+                provider_message_id=raw.provider_message_id,
+                mailbox_id=mailbox.id,
+                received_at=raw.received_at,
+                thread_id=raw.thread_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad message must not stop the others
+            await self._rescore_failed(mailbox, row, f"parse: {type(exc).__name__}")
+            return False
+        async with self._db.session() as session:
+            history = (
+                await repo.sender_history(session, mailbox.id, parsed.from_address) if parsed.from_address else None
+            )
+        verdict, outcome = await self._analyze(parsed, policy, history, hold=False, feedback=feedback)
+        if outcome != "ok":
+            await self._rescore_failed(mailbox, row, outcome)
+            return False
+
+        was_quarantined = bool(row.quarantined)
+        quarantined = should_quarantine(verdict, policy) or (was_quarantined and verdict.level is not VerdictLevel.SAFE)
+        try:
+            if verdict.level is VerdictLevel.SAFE:
+                await connector.mark_safe(row.provider_message_id)
+            else:
+                await connector.apply_verdict(raw, verdict, policy, relabel=True)
+                if quarantined and not should_quarantine(verdict, policy):
+                    await connector.quarantine(row.provider_message_id)  # never release on a re-check
+        except ConnectorError as exc:
+            if exc.retryable:
+                raise
+            await self._rescore_failed(mailbox, row, f"label: {exc}")
+            return False
+
+        async with self._db.session() as session:
+            fresh = await repo.get_message(session, row.id) or row
+            previous_level = fresh.level
+            await repo.record_rescore(session, fresh, verdict, quarantined)
+            for url in verdict.urls:
+                if url.detonation_job_id:
+                    await repo.record_detonation_ref(session, fresh.id, url.detonation_job_id, "url", url.url)
+            await repo.audit(
+                session,
+                None,
+                "system",
+                "rescore",
+                mailbox.id,
+                fresh.id,
+                {"from": previous_level, "to": verdict.level.value, "score": verdict.score, "quarantined": quarantined},
+            )
+        return True
+
+    async def _rescore_failed(self, mailbox: MailboxRow, row: MessageRow, reason: str) -> None:
+        log.warning("worker.rescore_failed", mailbox_id=mailbox.id, message_id=row.id, reason=reason)
+        async with self._db.session() as session:
+            fresh = await repo.get_message(session, row.id)
+            if fresh is not None:
+                await repo.set_message_state(session, fresh, repo.STATE_DONE)
+            await repo.audit(session, None, "system", "rescore_failed", mailbox.id, row.id, {"reason": reason[:500]})
+
+    async def _feedback(self, mailbox_id: str) -> ClientFeedback:
+        async with self._db.session() as session:
+            return await repo.load_client_feedback(session, mailbox_id)
+
     # ---------------------------------------------------------- message
     async def process_message(
         self, mailbox: MailboxRow, connector: MailboxConnector, raw: RawMessage
@@ -406,8 +555,9 @@ class Worker:
                 if parsed.from_address
                 else None
             )
+            feedback = await repo.load_client_feedback(session, mailbox.id)
 
-        verdict, outcome = await self._analyze(parsed, policy, history, hold=hold)
+        verdict, outcome = await self._analyze(parsed, policy, history, hold=hold, feedback=feedback)
 
         held_for_review = outcome == "timeout" and hold and not policy.release_on_timeout
         if not held_for_review:
@@ -463,7 +613,13 @@ class Worker:
         return row
 
     async def _analyze(
-        self, parsed: ParsedMessage, policy: PolicyConfig, history: SenderHistory | None, *, hold: bool
+        self,
+        parsed: ParsedMessage,
+        policy: PolicyConfig,
+        history: SenderHistory | None,
+        *,
+        hold: bool,
+        feedback: ClientFeedback | None = None,
     ) -> tuple[Verdict, str]:
         """Run the analysis pipeline under a time budget. Returns (verdict, outcome)
         where outcome is "ok", "timeout" or "error"."""
@@ -477,6 +633,7 @@ class Worker:
                 llm=self.llm,
                 artifact_store=self.artifact_store,
                 detonation_timeout_s=self._settings.detonation_timeout_s,
+                feedback=feedback,
             )
             verdict = await asyncio.wait_for(self.analyzer(parsed, ctx), timeout=timeout)
             return verdict, "ok"

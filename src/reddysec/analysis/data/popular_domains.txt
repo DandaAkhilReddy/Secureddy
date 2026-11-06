@@ -519,3 +519,23 @@ malwarebytes.com
 avast.com
 kaspersky.com
 bitdefender.com
+
+# --- large consumer brands seen in clients' mail (retail, finance media) ---
+# Added after real false positives (REI, The Motley Fool). Small senders do not
+# belong here: an authenticated mailing-list sender is handled by the
+# sender-trust rule in analysis/trust.py instead.
+barnesandnoble.com
+dickssportinggoods.com
+fool.com
+gap.com
+kohls.com
+kroger.com
+llbean.com
+oldnavy.com
+patagonia.com
+petco.com
+petsmart.com
+rei.com
+samsclub.com
+ulta.com
+zappos.com

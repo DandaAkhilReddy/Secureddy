@@ -1,0 +1,28 @@
+Delivered-To: client@gmail.com
+Received: from mta2.marketledger.com (mta2.marketledger.com. [223.165.122.90]) by mx.google.com with ESMTPS id r5si; Thu, 05 Nov 2026 13:42:23 -0800 (PST)
+Return-Path: <msprvs1=20769tjBU4kPq=bounces-266693-505@news.marketledger.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@news.marketledger.com header.s=scph0920 header.b=Vb5Nm3;
+       spf=pass (google.com: domain of msprvs1=20769tjbu4kpq=bounces-266693-505@news.marketledger.com designates 223.165.122.90 as permitted sender) smtp.mailfrom="msprvs1=20769tjBU4kPq=bounces-266693-505@news.marketledger.com";
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=news.marketledger.com
+X-MSFBL: ZmljdGlvbmFsLWZpeHR1cmU=
+From: Market Ledger Premium <editors@news.marketledger.com>
+Reply-To: no-reply@marketledger.com
+To: client@gmail.com
+Subject: Join us tonight at 5pm ET: our take on today's market turbulence
+Date: Thu, 05 Nov 2026 21:42:23 +0000
+Message-ID: <49.30.49505.F38FCEA6@mta1vrest.sd.prd.sparkpost>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body>
+<h1>Live tonight at 5pm ET</h1>
+<p>Markets dropped sharply today. Join our analysts live tonight: act now, seats are limited and the
+replay expires in 24 hours.</p>
+<p><a href="https://clicks.marketledger.com/f/a/Hq7Lm2Np9Rt4Vx6Zb8Dc1Fg~~/AAAHahA~/RgRh3k9UP0Q">Save my seat</a></p>
+<p><a href="https://clicks.marketledger.com/f/a/Jw3Ks5Lp7Mq9Nr2Ot4Pu6Qv~~/AAAHahA~/RgRh3k9UP0R">Read today's market note</a></p>
+<p><a href="https://clicks.marketledger.com/f/a/Xy1Za3Bc5De7Fg9Hi2Jk4Lm~~/AAAHahA~/RgRh3k9UP0S">Manage your account</a></p>
+<p style="font-size:11px">Market Ledger, 2000 Example Rd, Alexandria, VA 22300.
+<a href="https://clicks.marketledger.com/f/a/Uv6Wx8Yz0Ab2Cd4Ef6Gh8Ij~~/AAAHahA~/RgRh3k9UP0T">Unsubscribe</a></p>
+</body></html>

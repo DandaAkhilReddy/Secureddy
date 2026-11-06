@@ -245,7 +245,8 @@ def _domain_signals(parsed: ParsedMessage, contact_domains: tuple[str, ...]) -> 
     if m and not parsed.has_list_unsubscribe:
         rp_rd = registrable_domain(m.group(0).rsplit("@", 1)[-1])
         dkim_rd = registrable_domain(parsed.auth.dkim_domain) if parsed.auth.dkim_domain else ""
-        if rp_rd and rp_rd != from_rd and rp_rd != dkim_rd:
+        same_owner = brand_for_domain(rp_rd) is not None and brand_for_domain(rp_rd) == brand_for_domain(from_rd)
+        if rp_rd and rp_rd != from_rd and rp_rd != dkim_rd and not same_owner:
             signals.append(
                 make_signal(
                     "sender.return_path_mismatch", SignalStage.STATIC, 15,

@@ -14,9 +14,14 @@ Conventions this module relies on (shared with the worker):
   labels to ``{}`` for the same reason: the connector must install or remove
   the HOLD rule.
 * ``MessageRow.state`` values: ``pending``, ``analyzing``, ``done``,
-  ``failed``, ``released_by_deadman`` (worker), plus ``restore_requested``
-  (client asked for a quarantined message back; the worker performs it) and
-  ``reviewed`` (a concierge closed the human-review request).
+  ``failed``, ``released_by_deadman`` (worker), plus the client requests the
+  worker carries out: ``restore_requested`` (put a quarantined message back),
+  ``quarantine_requested`` ("This is fake"), ``relabel_safe_requested``
+  ("This is safe" on a message in the inbox) and ``rescore_requested``
+  ("Check again"); and ``reviewed`` (a concierge closed the review request).
+* Sender feedback ("This is safe" / "This is fake") lives in the
+  ``sender_feedback`` table; what an entry may trust is decided here (domain
+  or address) and what it is worth is decided by ``analysis.trust``.
 * Secrets are written through :func:`write_mailbox_secret` only, so the
   integrator can swap in ``mail.vault.CredentialVault`` in one place.
 """
@@ -31,6 +36,8 @@ from typing import Any
 from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from reddysec.analysis.trust import is_shared_platform
+from reddysec.analysis.urls import registrable_domain
 from reddysec.core.crypto import DecryptError, TokenCipher
 from reddysec.core.ids import new_id
 from reddysec.models import MALICIOUS_THRESHOLD, SUSPICIOUS_THRESHOLD, Role
@@ -40,7 +47,13 @@ from reddysec.store.models import (
     MailboxSecret,
     MessageRow,
     NotificationRow,
+    SenderFeedbackRow,
     UserRow,
+)
+from reddysec.store.repo import (
+    STATE_QUARANTINE_REQUESTED,
+    STATE_RELABEL_SAFE_REQUESTED,
+    STATE_RESCORE_REQUESTED,
 )
 
 STAFF_ROLES = frozenset({Role.CONCIERGE.value, Role.ADMIN.value})
@@ -48,6 +61,15 @@ SECRET_KINDS = frozenset({"google_oauth", "imap_password"})
 STATE_RESTORE_REQUESTED = "restore_requested"
 STATE_REVIEWED = "reviewed"
 ANALYZED_STATES = ("done", STATE_REVIEWED, STATE_RESTORE_REQUESTED, "released_by_deadman")
+# A client request is already waiting for the worker: no second one on top.
+PENDING_REQUEST_STATES = frozenset(
+    {STATE_RESTORE_REQUESTED, STATE_QUARANTINE_REQUESTED, STATE_RELABEL_SAFE_REQUESTED, STATE_RESCORE_REQUESTED}
+)
+# The worker is still analysing: it owns the row until it records a verdict.
+IN_FLIGHT_STATES = frozenset({"pending", "analyzing"})
+PAGE_SIZE = 50
+RECHECK_DAYS = 7
+RECHECK_LIMIT = 200
 
 # Representative scores for an analyst override so the stored score always
 # agrees with the stored level.
@@ -386,9 +408,10 @@ async def disconnect_mailbox(session: AsyncSession, user: UserRow, mailbox: Mail
 
 @dataclass(frozen=True)
 class WeeklyCounts:
-    checked: int = 0
+    checked: int = 0  # every email with a verdict
     suspicious: int = 0
     quarantined: int = 0
+    safe: int = 0  # the "Checked" card: verdict safe
 
 
 async def weekly_counts(session: AsyncSession, user: UserRow, *, now: datetime | None = None) -> WeeklyCounts:
@@ -398,6 +421,7 @@ async def weekly_counts(session: AsyncSession, user: UserRow, *, now: datetime |
             func.count(MessageRow.id),
             func.coalesce(func.sum(case((MessageRow.level == "suspicious", 1), else_=0)), 0),
             func.coalesce(func.sum(case((MessageRow.quarantined.is_(True), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((MessageRow.level == "safe", 1), else_=0)), 0),
         )
         .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
         .where(
@@ -406,8 +430,28 @@ async def weekly_counts(session: AsyncSession, user: UserRow, *, now: datetime |
             MessageRow.level.is_not(None),
         )
     )
-    checked, suspicious, quarantined = (await session.execute(stmt)).one()
-    return WeeklyCounts(int(checked), int(suspicious), int(quarantined))
+    checked, suspicious, quarantined, safe = (await session.execute(stmt)).one()
+    return WeeklyCounts(int(checked), int(suspicious), int(quarantined), int(safe))
+
+
+def _message_filters(
+    user: UserRow,
+    *,
+    mailbox_id: str | None,
+    level: str | None,
+    quarantined: bool | None,
+    since: datetime | None,
+) -> list[Any]:
+    where: list[Any] = [MailboxRow.user_id.in_(visible_owner_ids(user))]
+    if mailbox_id:
+        where.append(MessageRow.mailbox_id == mailbox_id)
+    if level:
+        where.append(MessageRow.level == level)
+    if quarantined is not None:
+        where.append(MessageRow.quarantined.is_(quarantined))
+    if since is not None:
+        where.append(MessageRow.received_at >= since)
+    return where
 
 
 async def list_messages(
@@ -415,24 +459,38 @@ async def list_messages(
     user: UserRow,
     *,
     limit: int = 20,
+    offset: int = 0,
     mailbox_id: str | None = None,
     level: str | None = None,
     quarantined: bool | None = None,
+    since: datetime | None = None,
 ) -> list[tuple[MessageRow, MailboxRow]]:
     stmt = (
         select(MessageRow, MailboxRow)
         .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
-        .where(MailboxRow.user_id.in_(visible_owner_ids(user)))
-        .order_by(MessageRow.received_at.desc())
+        .where(*_message_filters(user, mailbox_id=mailbox_id, level=level, quarantined=quarantined, since=since))
+        .order_by(MessageRow.received_at.desc(), MessageRow.id)
+        .offset(max(0, offset))
         .limit(limit)
     )
-    if mailbox_id:
-        stmt = stmt.where(MessageRow.mailbox_id == mailbox_id)
-    if level:
-        stmt = stmt.where(MessageRow.level == level)
-    if quarantined is not None:
-        stmt = stmt.where(MessageRow.quarantined.is_(quarantined))
     return [(row[0], row[1]) for row in (await session.execute(stmt)).all()]
+
+
+async def count_messages(
+    session: AsyncSession,
+    user: UserRow,
+    *,
+    mailbox_id: str | None = None,
+    level: str | None = None,
+    quarantined: bool | None = None,
+    since: datetime | None = None,
+) -> int:
+    stmt = (
+        select(func.count(MessageRow.id))
+        .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
+        .where(*_message_filters(user, mailbox_id=mailbox_id, level=level, quarantined=quarantined, since=since))
+    )
+    return int((await session.execute(stmt)).scalar_one())
 
 
 async def get_message(
@@ -519,6 +577,255 @@ async def record_feedback(
         target=message.id,
         details={"feedback": feedback, "level": message.level},
     )
+
+
+# --------------------------------------------------------------------------
+# "This is safe" / "This is fake" / "Check again"
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SenderDecision:
+    """What a "This is safe" / "This is fake" click recorded and set in motion.
+
+    ``scope`` is ``domain`` or ``address``; ``authenticated`` says whether the
+    judged message was verified by Google (DMARC); ``shared_platform`` is set
+    when the verified domain carries many people's mail (gmail.com, google.com,
+    paypal.com, ...), so only the one address could be trusted or blocked.
+    ``message_action`` is what happens to this message: ``restore``,
+    ``relabel``, ``quarantine`` or ``none``.
+    """
+
+    decision: str  # trusted | blocked
+    scope: str
+    value: str
+    authenticated: bool
+    shared_platform: bool
+    message_action: str
+
+
+def verified_sender_domain(message: MessageRow) -> str:
+    """The registrable domain Google verified for this message, or ``""``.
+
+    New verdicts carry it (``Verdict.verified_domain``); older ones are read
+    from the DMARC trust signal, which the engine only emits when DMARC passed
+    and was aligned with the From address.
+    """
+    raw = message.verdict if isinstance(message.verdict, dict) else {}
+    domain = raw.get("verified_domain")
+    if isinstance(domain, str) and domain:
+        return domain.lower()
+    signals = raw.get("signals") if isinstance(raw.get("signals"), list) else []
+    if any(isinstance(s, dict) and s.get("code") == "auth.dmarc_pass_aligned" for s in signals):
+        address = (message.from_address or "").lower()
+        if "@" in address:
+            return registrable_domain(address.rsplit("@", 1)[-1])
+    return ""
+
+
+def _sender_target(message: MessageRow) -> tuple[str, str, bool, bool]:
+    """(scope, value, authenticated, shared_platform) for a decision about this message's sender."""
+    verified = verified_sender_domain(message)
+    address = (message.from_address or "").strip().lower()
+    shared = bool(verified) and is_shared_platform(verified)
+    if verified and not shared:
+        return "domain", verified, True, False
+    if "@" in address:
+        return "address", address, bool(verified), shared
+    raise ValueError("no usable sender")
+
+
+async def _upsert_sender_feedback(
+    session: AsyncSession,
+    *,
+    user: UserRow,
+    message: MessageRow,
+    mailbox: MailboxRow,
+    scope: str,
+    value: str,
+    decision: str,
+    authenticated: bool,
+) -> None:
+    """One entry per (mailbox, scope, value); the latest decision wins. A new
+    decision also clears the opposite decision for the same sender (address or
+    domain), so "safe" after "fake" (or the reverse) does what the client means."""
+    address = (message.from_address or "").strip().lower()
+    domain = registrable_domain(address.rsplit("@", 1)[-1]) if "@" in address else ""
+    opposite = "blocked" if decision == "trusted" else "trusted"
+    stale = [(scope, value)] + [("address", address)] * bool(address) + [("domain", domain)] * bool(domain)
+    for s_scope, s_value in stale:
+        await session.execute(
+            delete(SenderFeedbackRow).where(
+                SenderFeedbackRow.mailbox_id == mailbox.id,
+                SenderFeedbackRow.scope == s_scope,
+                SenderFeedbackRow.value == s_value,
+                SenderFeedbackRow.decision == opposite,
+            )
+        )
+    existing = (
+        await session.execute(
+            select(SenderFeedbackRow).where(
+                SenderFeedbackRow.mailbox_id == mailbox.id,
+                SenderFeedbackRow.scope == scope,
+                SenderFeedbackRow.value == value,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        session.add(
+            SenderFeedbackRow(
+                id=new_id("sfb"),
+                mailbox_id=mailbox.id,
+                scope=scope,
+                value=value,
+                decision=decision,
+                authenticated=authenticated,
+                source_message_id=message.id,
+                created_by=user.id,
+                created_at=utcnow(),
+            )
+        )
+    else:
+        existing.decision = decision
+        existing.authenticated = authenticated
+        existing.source_message_id = message.id
+        existing.created_by = user.id
+        existing.created_at = utcnow()
+    await session.flush()
+
+
+async def record_sender_decision(
+    session: AsyncSession, user: UserRow, message: MessageRow, mailbox: MailboxRow, decision: str
+) -> SenderDecision:
+    """"This is safe" (``decision="safe"``) or "This is fake" (``"fake"``).
+
+    Records what the client said about the sender and asks the worker to act
+    on this message now. Raises ``ValueError`` when the message has no usable
+    sender (nothing to trust or block).
+    """
+    if decision not in ("safe", "fake"):
+        raise ValueError(f"unknown decision {decision!r}")
+    scope, value, authenticated, shared = _sender_target(message)
+    stored = "trusted" if decision == "safe" else "blocked"
+    await _upsert_sender_feedback(
+        session, user=user, message=message, mailbox=mailbox, scope=scope, value=value,
+        decision=stored, authenticated=authenticated,
+    )
+
+    action = "none"
+    busy = message.state in IN_FLIGHT_STATES or message.state in PENDING_REQUEST_STATES
+    if not busy:
+        if decision == "safe" and message.quarantined:
+            message.state = STATE_RESTORE_REQUESTED
+            message.restored_by_client = True
+            action = "restore"
+        elif decision == "safe" and message.level != "safe":
+            message.state = STATE_RELABEL_SAFE_REQUESTED
+            action = "relabel"
+        elif decision == "fake" and not message.quarantined:
+            message.state = STATE_QUARANTINE_REQUESTED
+            action = "quarantine"
+    _update_verdict(
+        message, client_decision={"decision": decision, "by": user.id, "at": utcnow().isoformat()}
+    )
+    audit(
+        session,
+        actor=user,
+        action="sender_trusted" if decision == "safe" else "sender_blocked",
+        mailbox_id=mailbox.id,
+        target=message.id,
+        details={
+            "scope": scope,
+            "value": value,
+            "authenticated": authenticated,
+            "shared_platform": shared,
+            "message_action": action,
+            "level": message.level,
+        },
+    )
+    return SenderDecision(stored, scope, value, authenticated, shared, action)
+
+
+async def list_sender_feedback(session: AsyncSession, mailbox_ids: list[str]) -> list[SenderFeedbackRow]:
+    if not mailbox_ids:
+        return []
+    stmt = (
+        select(SenderFeedbackRow)
+        .where(SenderFeedbackRow.mailbox_id.in_(mailbox_ids))
+        .order_by(SenderFeedbackRow.decision, SenderFeedbackRow.value)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def remove_sender_feedback(
+    session: AsyncSession, user: UserRow, mailbox: MailboxRow, entry_id: str
+) -> SenderFeedbackRow | None:
+    """Delete one entry of a mailbox the caller manages. ``None`` if not found."""
+    entry = await session.get(SenderFeedbackRow, entry_id)
+    if entry is None or entry.mailbox_id != mailbox.id:
+        return None
+    await session.delete(entry)
+    audit(
+        session,
+        actor=user,
+        action="sender_feedback_removed",
+        mailbox_id=mailbox.id,
+        target=entry.value,
+        details={"scope": entry.scope, "decision": entry.decision},
+    )
+    return entry
+
+
+async def request_rescore(session: AsyncSession, user: UserRow, message: MessageRow, mailbox: MailboxRow) -> bool:
+    """"Check again": the worker re-fetches and re-analyses the message. False
+    while the message is still being checked or another request is waiting."""
+    if message.state in IN_FLIGHT_STATES or message.state in PENDING_REQUEST_STATES:
+        return False
+    message.state = STATE_RESCORE_REQUESTED
+    audit(
+        session,
+        actor=user,
+        action="rescore_requested",
+        mailbox_id=mailbox.id,
+        target=message.id,
+        details={"level": message.level},
+    )
+    return True
+
+
+async def request_recheck_recent(
+    session: AsyncSession, user: UserRow, mailbox: MailboxRow, *, days: int = RECHECK_DAYS, now: datetime | None = None
+) -> int:
+    """Ask the worker to re-check this mailbox's last ``days`` of mail (newest
+    first, at most ``RECHECK_LIMIT``). The worker rations re-checks per cycle so
+    new mail is never kept waiting. Returns how many were queued."""
+    since = (now or utcnow()) - timedelta(days=days)
+    busy = list(PENDING_REQUEST_STATES | IN_FLIGHT_STATES)
+    rows = (
+        await session.execute(
+            select(MessageRow)
+            .where(
+                MessageRow.mailbox_id == mailbox.id,
+                MessageRow.received_at >= since,
+                MessageRow.state.not_in(busy),
+            )
+            .order_by(MessageRow.received_at.desc())
+            .limit(RECHECK_LIMIT)
+        )
+    ).scalars()
+    count = 0
+    for row in rows:
+        row.state = STATE_RESCORE_REQUESTED
+        count += 1
+    audit(
+        session,
+        actor=user,
+        action="recheck_requested",
+        mailbox_id=mailbox.id,
+        target=mailbox.address,
+        details={"days": days, "count": count},
+    )
+    return count
 
 
 # --------------------------------------------------------------------------

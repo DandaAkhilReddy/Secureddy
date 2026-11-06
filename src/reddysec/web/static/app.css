@@ -288,6 +288,7 @@ legend { color: var(--text-muted); font-size: 0.88rem; margin-bottom: 8px; paddi
 .table-wrap.card .table th:last-child, .table-wrap.card .table td:last-child { padding-right: 20px; }
 .table tbody tr:hover { background: var(--surface-2); }
 .col-subject { max-width: 34ch; overflow-wrap: anywhere; }
+.table td { overflow-wrap: anywhere; }
 time { color: var(--text-muted); white-space: nowrap; }
 
 .pager { display: flex; gap: 14px; align-items: center; justify-content: center; margin-top: 8px; }
@@ -354,7 +355,7 @@ time { color: var(--text-muted); white-space: nowrap; }
 }
 
 @media (max-width: 760px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .nav {
     position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 14px;
     padding: 14px 16px; border-right: 0; border-bottom: 1px solid var(--line);
@@ -384,4 +385,108 @@ time { color: var(--text-muted); white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
+}
+
+/* ---------- clickable dashboard numbers ---------- */
+
+ul.stats { list-style: none; padding: 0; }
+.stats > li { display: flex; }
+.stat-link {
+  width: 100%; color: inherit; text-decoration: none; position: relative;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+.stat-link:hover { text-decoration: none; border-color: var(--line-strong); background: var(--surface-2); }
+.stat-link:hover .stat-hint { color: var(--accent-strong); }
+.stat-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-color: var(--accent); }
+.stat-link:active { transform: translateY(1px); }
+.stat-ok .stat-value { color: var(--ok); }
+.stat-hint { color: var(--text-dim); font-size: 0.84rem; margin-top: 6px; }
+
+/* ---------- message list ---------- */
+
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.tab {
+  padding: 10px 14px; color: var(--text-muted); border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 600; font-size: 0.95rem;
+}
+.tab:hover { color: var(--text); background: var(--surface); text-decoration: none; }
+.tab[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
+.list-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.list-meta p { margin: 0; }
+.list-meta .inline-form .input { flex: 0 1 260px; }
+
+.message-list { list-style: none; margin: 0 0 18px; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.message-list li + li { border-top: 1px solid var(--line); }
+.message-row {
+  display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) auto; gap: 6px 16px; align-items: start;
+  padding: 14px 18px; color: inherit;
+}
+.message-row:hover { background: var(--surface-2); text-decoration: none; }
+.message-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.message-when { font-size: 0.86rem; padding-top: 2px; }
+.message-main { display: grid; gap: 2px; min-width: 0; }
+.message-from { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.message-from strong { font-weight: 600; overflow-wrap: anywhere; }
+.message-subject { color: var(--text); overflow-wrap: anywhere; }
+.message-reason { color: var(--text-muted); font-size: 0.9rem; }
+.message-chip { padding-top: 2px; }
+
+/* ---------- report ---------- */
+
+.verdict-head { border-left: 3px solid var(--accent); padding: 4px 0 4px 18px; }
+.verdict-ok { border-left-color: var(--ok); }
+.verdict-warn { border-left-color: var(--warn); }
+.verdict-bad { border-left-color: var(--bad); }
+.verdict-head .verdict-block { margin-bottom: 10px; }
+.headline { font-size: 2rem; margin-bottom: 10px; }
+.report-meta { margin-top: 10px; overflow-wrap: anywhere; }
+.report-subject { color: var(--text); }
+
+.action-bar .actions { margin-bottom: 14px; }
+.concierge-form { margin-bottom: 10px; }
+
+.reasons { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.reason {
+  padding: 14px 16px; background: var(--bg); border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong); border-radius: var(--radius-sm);
+}
+.reason-bad { border-left-color: var(--bad); }
+.reason-warn { border-left-color: var(--warn); }
+.reason-info { border-left-color: var(--grey); }
+.reason-good { border-left-color: var(--ok); }
+.reason-good .reason-title { color: var(--ok); }
+.reason-title { font-family: var(--font-body); font-size: 1rem; font-weight: 600; margin: 0 0 4px; }
+.reason-meaning { color: var(--text-muted); margin: 0 0 4px; }
+.reason-todo { margin: 0; font-size: 0.94rem; }
+.reason-todo-label { color: var(--accent-strong); font-weight: 600; }
+.good-title, .sub-title { font-family: var(--font-body); font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 22px 0 10px; }
+
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.check-item { display: flex; gap: 10px; align-items: baseline; }
+.check-mark { flex: none; width: 1.4em; height: 1.4em; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700; font-size: 0.85rem; }
+.check-ok .check-mark { color: var(--ok); background: var(--ok-bg); }
+.check-bad .check-mark { color: var(--bad); background: var(--bad-bg); }
+.check-none .check-mark { color: var(--grey); background: var(--grey-bg); }
+
+.tech summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; }
+.tech summary::-webkit-details-marker { display: none; }
+.tech summary::before { content: "+"; color: var(--accent); font-weight: 700; width: 1em; }
+.tech[open] summary::before { content: "\2212"; }
+.tech summary h2 { margin: 0; font-size: 1.1rem; }
+.tech[open] summary { margin-bottom: 16px; }
+
+/* ---------- trusted & blocked senders ---------- */
+
+.senders { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.senders h3 { font-size: 1.05rem; margin-bottom: 10px; }
+.sender-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
+.sender-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.sender-row form { margin: 0; }
+.sender-value { margin-left: 6px; overflow-wrap: anywhere; }
+.recheck-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; }
+
+@media (max-width: 760px) {
+  .message-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .message-when { grid-column: 1 / -1; }
+  .headline { font-size: 1.6rem; }
 }

@@ -1,63 +1,72 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, sender with context %}
+{% from "_macros.html" import chip with context %}
 {% block title %}All email · Secureddy{% endblock %}
 {% block content %}
 <header class="page-head">
-  <h1>All email</h1>
-  <p class="lede">Every message we have checked, newest first.</p>
+  <h1>Your email</h1>
+  <p class="lede">Every message we have checked, newest first. Open one to see why we marked it.</p>
 </header>
 
-<form method="get" action="/messages" class="filters">
-  <label class="field field-inline">
-    <span>Verdict</span>
-    <select class="input" name="level">
-      <option value="">Any</option>
-      {% for code, label in levels %}
-      <option value="{{ code }}"{% if level == code %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
+<nav class="tabs" aria-label="Filter by verdict">
+  {% for t in tabs %}
+  <a class="tab" href="{{ t.href }}"{% if t.current %} aria-current="page"{% endif %}>{{ t.label }}</a>
+  {% endfor %}
+</nav>
+
+<div class="list-meta">
+  <p class="muted small">
+    {% if days %}Showing the last {{ days }} days. <a class="link" href="{{ all_days_href }}">Show all dates</a>{% else %}Showing all dates.{% endif %}
+    {% if total %} &middot; {{ total }} email{% if total != 1 %}s{% endif %}{% endif %}
+  </p>
   {% if mailboxes | length > 1 %}
-  <label class="field field-inline">
-    <span>Mailbox</span>
-    <select class="input" name="mailbox">
-      <option value="">All</option>
-      {% for m in mailboxes %}
-      <option value="{{ m.id }}"{% if mailbox == m.id %} selected{% endif %}>{{ m.address }}</option>
-      {% endfor %}
-    </select>
-  </label>
+  <form method="get" action="/messages" class="inline-form">
+    {% if level %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
+    {% if quarantined %}<input type="hidden" name="filter" value="quarantined">{% endif %}
+    {% if days %}<input type="hidden" name="days" value="{{ days }}">{% endif %}
+    <label class="field field-inline">
+      <span>Mailbox</span>
+      <select class="input" name="mailbox">
+        <option value="">All</option>
+        {% for m in mailboxes %}
+        <option value="{{ m.id }}"{% if mailbox == m.id %} selected{% endif %}>{{ m.address }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-quiet btn-small" type="submit">Show</button>
+  </form>
   {% endif %}
-  <label class="check">
-    <input type="checkbox" name="quarantined" value="1"{% if quarantined %} checked{% endif %}>
-    <span>Only Quarantine</span>
-  </label>
-  <button class="btn btn-quiet" type="submit">Filter</button>
-</form>
+</div>
 
 {% if rows %}
-<div class="card table-wrap">
-  <table class="table">
-    <thead>
-      <tr><th>When</th><th>From</th><th>Subject</th><th>Verdict</th><th><span class="sr-only">Report</span></th></tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td><time datetime="{{ r.message.received_at.isoformat() }}" title="{{ r.message.received_at | dt }}">{{ r.message.received_at | ago }}</time></td>
-        <td>{{ sender(r.message) }}</td>
-        <td class="col-subject">{{ r.message.subject or "(no subject)" }}{% if r.summary %}<span class="muted small block">{{ r.summary }}</span>{% endif %}</td>
-        <td>{{ chip(r.chip) }}</td>
-        <td><a class="link" href="/messages/{{ r.message.id }}">Report</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+<ul class="message-list">
+  {% for r in rows %}
+  <li>
+    <a class="message-row" href="/messages/{{ r.message.id }}">
+      <span class="message-when"><time datetime="{{ r.message.received_at.isoformat() }}" title="{{ r.message.received_at | dt }}">{{ r.message.received_at | ago }}</time></span>
+      <span class="message-main">
+        <span class="message-from">
+          <strong>{{ r.message.from_name or r.message.from_address or "Unknown sender" }}</strong>
+          {% if r.message.from_name and r.message.from_address %}<span class="muted small">{{ r.message.from_address }}</span>{% endif %}
+        </span>
+        <span class="message-subject">{{ r.message.subject or "(no subject)" }}</span>
+        {% if r.reason %}<span class="message-reason">{{ r.reason }}</span>{% endif %}
+      </span>
+      <span class="message-chip">{{ chip(r.chip) }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% if prev_href %}<a class="btn btn-quiet btn-small" href="{{ prev_href }}" rel="prev">Newer</a>{% endif %}
+  <span class="muted small">Page {{ page }} of {{ pages }}</span>
+  {% if next_href %}<a class="btn btn-quiet btn-small" href="{{ next_href }}" rel="next">Older</a>{% endif %}
+</nav>
+{% endif %}
 {% else %}
 <section class="card empty">
-  <h2>Nothing to show</h2>
-  <p class="muted">No email matches these filters yet.</p>
+  <h2>{{ empty_title }}</h2>
+  <p class="muted">{{ empty_text }}</p>
 </section>
 {% endif %}
 {% endblock %}

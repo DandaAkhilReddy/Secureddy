@@ -96,10 +96,16 @@ class FakeMailbox:
     async def fetch_raw(self, provider_message_id: str) -> bytes:
         return self.messages[provider_message_id].raw
 
-    async def apply_verdict(self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig) -> None:
+    async def apply_verdict(
+        self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False
+    ) -> None:
         pid = msg.provider_message_id
         labels = self.labels.setdefault(pid, set())
         labels.discard("Secureddy/Checking")
+        if relabel:
+            labels.discard("Secureddy/Checked")
+            labels.discard("Secureddy/Suspicious")
+            self.actions.append(("relabel", pid))
         if verdict.level is VerdictLevel.MALICIOUS:
             labels.add("Secureddy/Quarantine")
         elif verdict.level is VerdictLevel.SUSPICIOUS:
@@ -129,6 +135,14 @@ class FakeMailbox:
         labels.add("Secureddy/Released by you")
         self.in_inbox[provider_message_id] = True
         self.actions.append(("restore", provider_message_id))
+
+    async def mark_safe(self, provider_message_id: str) -> None:
+        labels = self.labels.setdefault(provider_message_id, set())
+        for name in ("Secureddy/Suspicious", "Secureddy/Quarantine", "Secureddy/Checking"):
+            labels.discard(name)
+        labels.add("Secureddy/Checked")
+        self.in_inbox[provider_message_id] = True
+        self.actions.append(("mark_safe", provider_message_id))
 
     async def release_all_pending(self) -> int:
         n = 0

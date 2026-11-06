@@ -105,4 +105,5 @@ async def test_dashboard_handles_verdict_summary_in_table(client, seed, login, m
         mailbox, verdict=make_verdict("safe", summary="Nothing to worry about here."), level="safe"
     )
     login(client, "summary@example.com")
-    assert "Nothing to worry about here." in client.get("/messages").text
+    # The list shows one plain reason per row; the full summary lives on the report.
+    assert "Nothing wrong found." in client.get("/messages").text

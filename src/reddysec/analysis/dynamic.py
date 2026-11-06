@@ -24,7 +24,8 @@ from reddysec.models import (
 from .attachments import DANGEROUS_EXTENSIONS, EXECUTABLE_SNIFFED, _ext_parts
 from .common import make_signal
 from .domains import brand_for_domain, brands_mentioned, legit_domains_for, lookalike_analysis
-from .intel import IntelClient, is_popular, is_tracking_domain
+from .intel import IntelClient, is_brand_shortener, is_popular, is_tracking_domain
+from .trust import SenderTrust, display_mismatch_assessment, shown_domain, skip_opaque_token
 from .urls import registrable_domain
 
 SUSPICIOUS_TLDS: frozenset[str] = frozenset(
@@ -57,8 +58,13 @@ async def url_static_signals(
     intel: IntelClient | None,
     history: SenderHistory | None = None,
     contact_domains: tuple[str, ...] = (),
+    sender: SenderTrust | None = None,
 ) -> list[Signal]:
-    """Everything we can say about a link without opening it."""
+    """Everything we can say about a link without opening it.
+
+    ``sender`` (optional) is what we could verify about the sender; links to
+    its own verified domain are judged accordingly (see ``analysis.trust``).
+    """
     signals: list[Signal] = []
     ev = _evidence(url)
     scheme = url.normalized.split(":", 1)[0].lower()
@@ -122,7 +128,7 @@ async def url_static_signals(
                 f"Link uses international characters that can disguise its real name ({host})", **ev,
             )
         )
-    if url.is_shortener:
+    if url.is_shortener and not is_brand_shortener(rd):
         signals.append(
             make_signal(
                 "url.shortener", SignalStage.STATIC, 15,
@@ -130,11 +136,19 @@ async def url_static_signals(
             )
         )
     if url.display_mismatch:
+        weight, impersonates = display_mismatch_assessment(url, sender)
+        title = f"Link text says '{(url.display_text or '')[:40]}' but it goes to {host}"
+        detail = "The visible address and the real destination differ."
+        if impersonates:
+            title = f"Link pretends to go to {shown_domain(url.display_text)} but goes to {host}"
+            detail = "The text shows a well-known company's website, but the link leads somewhere else."
+        elif weight < 35:
+            detail += " The link still goes to the sender's own verified website or its mail service, so this counts for little."
         signals.append(
             make_signal(
-                "url.display_mismatch", SignalStage.STATIC, 35,
-                f"Link text says '{(url.display_text or '')[:40]}' but it goes to {host}",
-                "The visible address and the real destination differ.", shown=url.display_text, **ev,
+                "url.display_mismatch", SignalStage.STATIC, weight, title, detail,
+                shown=url.display_text, shown_domain=shown_domain(url.display_text) or None,
+                impersonates=impersonates, **ev,
             )
         )
     if age is not None and not popular:
@@ -153,11 +167,11 @@ async def url_static_signals(
                     f"Website {rd} is only {age} days old", age_days=age, **ev,
                 )
             )
-    if url.has_opaque_token and not popular and not url.is_shortener and not is_tracking_domain(rd):
+    if url.has_opaque_token and not popular and not url.is_shortener and not skip_opaque_token(url, sender):
         signals.append(
             make_signal(
                 "url.opaque_token_unknown_host", SignalStage.STATIC, 10,
-                f"Link to {rd} carries a long tracking or one-time code", **ev,
+                f"Link to {rd} carries a long tracking or one-time code", domain=rd, **ev,
             )
         )
     tld = rd.rsplit(".", 1)[-1] if "." in rd else ""
@@ -182,14 +196,16 @@ async def url_static_signals(
     path_text = (parts.path + "?" + parts.query).lower()
     if any(word in path_text for word in _CREDENTIAL_PATH_RE) and not popular:
         brand_in_url = brands_mentioned(host.replace("-", " ").replace(".", " ") + " " + path_text.replace("/", " ").replace("-", " "))
-        weight = 15 if brand_in_url else 5
-        signals.append(
-            make_signal(
-                "url.credential_words", SignalStage.STATIC, weight,
-                f"Link path talks about logging in or verifying ({parts.path[:40]})",
-                brand=brand_in_url[0] if brand_in_url else None, **ev,
+        own_site = sender is not None and sender.owns(host or rd)
+        # "rei.com/account" from verified rei.com is simply where accounts live.
+        if brand_in_url or not own_site:
+            signals.append(
+                make_signal(
+                    "url.credential_words", SignalStage.STATIC, 15 if brand_in_url else 5,
+                    f"Link path talks about logging in or verifying ({parts.path[:40]})",
+                    brand=brand_in_url[0] if brand_in_url else None, **ev,
+                )
             )
-        )
     if scheme == "http" and not popular:
         signals.append(
             make_signal(

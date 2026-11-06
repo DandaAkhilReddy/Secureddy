@@ -12,6 +12,7 @@ from .models import (
     MessageRow,
     NotificationRow,
     ReadingRoomRow,
+    SenderFeedbackRow,
     UserRow,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "MessageRow",
     "NotificationRow",
     "ReadingRoomRow",
+    "SenderFeedbackRow",
     "UserRow",
     "get_database",
 ]

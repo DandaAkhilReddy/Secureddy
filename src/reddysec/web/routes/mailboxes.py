@@ -39,7 +39,11 @@ async def _owned_or_404(session, user: UserRow, mailbox_id: str):
 async def mailboxes_page(request: Request, user: UserRow = Depends(current_user)) -> Response:
     async with request.app.state.db.session() as session:
         mailboxes = await queries.list_mailboxes(session, user)
+        entries = await queries.list_sender_feedback(session, [m.id for m in mailboxes])
     settings = request.app.state.settings
+    by_mailbox: dict[str, list] = {}
+    for entry in entries:
+        by_mailbox.setdefault(entry.mailbox_id, []).append(presenters.sender_entry(entry))
     return render(
         request,
         "mailboxes.html",
@@ -50,6 +54,7 @@ async def mailboxes_page(request: Request, user: UserRow = Depends(current_user)
                     "status": presenters.mailbox_status_chip(m),
                     "mode": presenters.mode_chip(m),
                     "owned": m.user_id == user.id,
+                    "senders": by_mailbox.get(m.id, []),
                 }
                 for m in mailboxes
             ],
@@ -179,4 +184,35 @@ async def mailbox_disconnect(
         if mailbox.status != "disconnected":
             await queries.disconnect_mailbox(session, user, mailbox)
     flash(request, "The mailbox is disconnected and its password or token has been deleted from our systems.")
+    return _see_other()
+
+
+@router.post("/mailboxes/{mailbox_id}/senders/{entry_id}/remove", name="sender_feedback_remove")
+async def sender_feedback_remove(
+    request: Request, mailbox_id: str, entry_id: str, user: UserRow = Depends(current_user)
+) -> Response:
+    """Forget one "This is safe" / "This is fake" choice."""
+    async with request.app.state.db.session() as session:
+        mailbox = await _owned_or_404(session, user, mailbox_id)
+        entry = await queries.remove_sender_feedback(session, user, mailbox, entry_id)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="We could not find that sender.")
+    flash(request, f"Removed {entry.value}. New email from it will be checked like any other.")
+    return _see_other()
+
+
+@router.post("/mailboxes/{mailbox_id}/recheck", name="mailbox_recheck")
+async def mailbox_recheck(request: Request, mailbox_id: str, user: UserRow = Depends(current_user)) -> Response:
+    """Re-check the last 7 days with today's rules and the client's choices."""
+    async with request.app.state.db.session() as session:
+        mailbox = await _owned_or_404(session, user, mailbox_id)
+        count = await queries.request_recheck_recent(session, user, mailbox)
+    if count:
+        flash(
+            request,
+            f"We are checking {count} email{'s' if count != 1 else ''} from the last 7 days again. "
+            "Labels in your mailbox update over the next few minutes.",
+        )
+    else:
+        flash(request, "There is no email from the last 7 days to check again.", "warn")
     return _see_other()

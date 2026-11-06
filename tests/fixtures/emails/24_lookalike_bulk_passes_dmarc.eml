@@ -1,0 +1,23 @@
+Delivered-To: client@gmail.com
+Received: from m45-61-140-30.mailgun.net (m45-61-140-30.mailgun.net. [45.61.140.30]) by mx.google.com with ESMTPS id u9si; Thu, 05 Nov 2026 12:05:44 -0800 (PST)
+Return-Path: <bounce+aa11bb.cc22dd-client=gmail.com@mg.walrnart.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@walrnart.com header.s=mx header.b=Zx2Cv4;
+       spf=pass (google.com: domain of bounce+aa11bb.cc22dd-client=gmail.com@mg.walrnart.com designates 45.61.140.30 as permitted sender) smtp.mailfrom="bounce+aa11bb.cc22dd-client=gmail.com@mg.walrnart.com";
+       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=walrnart.com
+X-Mailgun-Sid: WyJsb29rYWxpa2UiXQ==
+List-Unsubscribe: <https://walrnart.com/unsubscribe/5c4b3a29>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+From: Order Help <orders@walrnart.com>
+To: client@gmail.com
+Subject: Problem with your order 2000117-55102938
+Date: Thu, 05 Nov 2026 20:05:40 +0000
+Message-ID: <20261105200540.aa11bb@walrnart.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body>
+<p>We could not process your order 2000117-55102938.</p>
+<p><a href="https://walrnart.com/orders/review?ref=Lm4Np6Rt8Vx0Zb2Dc">Review your order</a></p>
+</body></html>

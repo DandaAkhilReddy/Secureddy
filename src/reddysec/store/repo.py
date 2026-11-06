@@ -20,7 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from reddysec.core.ids import new_id
-from reddysec.models import DetonationResult, ParsedMessage, RawMessage, SenderHistory, Verdict
+from reddysec.models import (
+    ClientFeedback,
+    DetonationResult,
+    ParsedMessage,
+    RawMessage,
+    SenderHistory,
+    Verdict,
+)
 from reddysec.store.models import (
     AuditLog,
     Contact,
@@ -30,6 +37,7 @@ from reddysec.store.models import (
     MailboxSecret,
     MessageRow,
     NotificationRow,
+    SenderFeedbackRow,
     UserRow,
     utcnow,
 )
@@ -44,6 +52,14 @@ STATE_HELD_FOR_REVIEW = "held_for_review"
 STATE_RESTORE_REQUESTED = "restore_requested"
 STATE_RESTORE_FAILED = "restore_failed"
 STATE_RELEASED_BY_DEADMAN = "released_by_deadman"
+# Client requests the web app records and the worker (which owns mailbox
+# access) carries out on its next cycle.
+STATE_QUARANTINE_REQUESTED = "quarantine_requested"  # "This is fake"
+STATE_RELABEL_SAFE_REQUESTED = "relabel_safe_requested"  # "This is safe" on a message in the inbox
+STATE_RESCORE_REQUESTED = "rescore_requested"  # "Check again"
+CLIENT_REQUEST_STATES = frozenset(
+    {STATE_RESTORE_REQUESTED, STATE_QUARANTINE_REQUESTED, STATE_RELABEL_SAFE_REQUESTED, STATE_RESCORE_REQUESTED}
+)
 REPROCESSABLE_STATES = frozenset({STATE_PENDING, STATE_ANALYZING})
 
 MAX_DISPLAY_NAMES = 5
@@ -290,8 +306,88 @@ async def mark_restored(session: AsyncSession, message_row: MessageRow) -> Messa
     message_row.state = STATE_DONE
     message_row.quarantined = False
     message_row.restored_by_client = True
+    if client_decision(message_row) == "safe":
+        message_row.level = "safe"
     await session.flush()
     return message_row
+
+
+def client_decision(message_row: MessageRow) -> str | None:
+    """``"safe"`` / ``"fake"`` when the client judged this message, else ``None``."""
+    raw = message_row.verdict if isinstance(message_row.verdict, dict) else {}
+    decision = raw.get("client_decision")
+    return str(decision.get("decision")) if isinstance(decision, dict) and decision.get("decision") else None
+
+
+async def list_requests(
+    session: AsyncSession, mailbox_id: str, state: str, *, limit: int | None = None
+) -> list[MessageRow]:
+    """Messages of one mailbox waiting in a client-request state, newest message first."""
+    stmt = (
+        select(MessageRow)
+        .where(MessageRow.mailbox_id == mailbox_id, MessageRow.state == state)
+        .order_by(MessageRow.received_at.desc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def mark_quarantined_by_client(session: AsyncSession, message_row: MessageRow) -> MessageRow:
+    """The worker moved a message the client called fake into Quarantine."""
+    message_row.state = STATE_DONE
+    message_row.quarantined = True
+    message_row.level = "malicious"
+    await session.flush()
+    return message_row
+
+
+async def mark_relabeled_safe(session: AsyncSession, message_row: MessageRow) -> MessageRow:
+    """The worker swapped the mailbox label to Checked after "This is safe"."""
+    message_row.state = STATE_DONE
+    message_row.quarantined = False
+    message_row.level = "safe"
+    await session.flush()
+    return message_row
+
+
+async def record_rescore(
+    session: AsyncSession, message_row: MessageRow, verdict: Verdict, quarantined: bool
+) -> MessageRow:
+    """Store a re-check's verdict, keeping the one it replaces under ``previous``
+    (one level deep, so repeated re-checks do not grow the row)."""
+    old = dict(message_row.verdict or {})
+    old.pop("previous", None)
+    keep = {k: old[k] for k in ("client_decision", "review", "review_request", "override") if k in old}
+    await record_verdict(session, message_row, verdict, quarantined, state=STATE_DONE)
+    message_row.verdict = {**(message_row.verdict or {}), **keep, "previous": old or None}
+    await session.flush()
+    return message_row
+
+
+# --------------------------------------------------------- sender feedback
+async def load_client_feedback(session: AsyncSession, mailbox_id: str) -> ClientFeedback:
+    """Everything the client said about senders of one mailbox, in the shape
+    ``AnalysisContext.feedback`` expects."""
+    rows = (
+        await session.execute(select(SenderFeedbackRow).where(SenderFeedbackRow.mailbox_id == mailbox_id))
+    ).scalars()
+    fb = ClientFeedback()
+    for row in rows:
+        if row.decision == "blocked":
+            if row.scope == "domain":
+                fb.blocked_domains.append(row.value)
+            elif row.authenticated:
+                fb.blocked_addresses.append(row.value)
+            else:
+                fb.blocked_unverified_addresses.append(row.value)
+        elif row.scope == "domain":
+            fb.trusted_domains.append(row.value)
+        elif row.authenticated:
+            fb.verified_addresses.append(row.value)
+        else:
+            fb.trusted_addresses.append(row.value)
+    return fb
 
 
 async def mark_failed(session: AsyncSession, message_row: MessageRow, error: str | None = None) -> MessageRow:

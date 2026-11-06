@@ -92,6 +92,11 @@ class Verdict(BaseModel):
     analyzed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     duration_ms: int = 0
     engine_version: str = ""
+    # What we could verify about the sender (analysis.trust). The web app uses
+    # it to decide what "This is safe" may trust: a verified domain, or only
+    # one address. Empty for verdicts written before these fields existed.
+    verified_domain: str = ""
+    bulk_sender: bool = False
 
     @property
     def top_signals(self) -> list[Signal]:

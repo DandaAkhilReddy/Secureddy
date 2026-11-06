@@ -36,6 +36,17 @@ STATIC_FIXTURES = (
     "14_icloud_calendar_invite",
     "15_ip_literal_and_shortener",
     "16_magic_link_from_popular_sender",
+    # Real-world false positives (Nov 2026), rebuilt as fictional messages, and
+    # the attacks that must still be caught after the fix.
+    "17_retail_order_gift_card_mention",
+    "18_retail_promo_shop_gift_cards",
+    "19_nonprofit_partner_links",
+    "20_newsletter_esp_redirects_botwall",
+    "21_google_family_digest",
+    "22_gift_card_scam_freemail",
+    "23_chase_text_unaligned_href",
+    "24_lookalike_bulk_passes_dmarc",
+    "25_bulk_sender_credential_page",
 )
 
 

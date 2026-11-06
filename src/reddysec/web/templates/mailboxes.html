@@ -57,6 +57,38 @@
     {% elif not m.owned %}
     <p class="muted small">Only the account owner can change this mailbox.</p>
     {% endif %}
+
+    <section class="senders" aria-labelledby="senders-{{ m.row.id }}">
+      <h3 id="senders-{{ m.row.id }}">Trusted &amp; blocked senders</h3>
+      {% if m.senders %}
+      <ul class="sender-list">
+        {% for e in m.senders %}
+        <li class="sender-row">
+          <div>
+            <span class="chip tone-{{ 'ok' if e.trusted else 'bad' }}">{{ "Trusted" if e.trusted else "Blocked" }}</span>
+            <strong class="sender-value">{{ e.value }}</strong>
+            <span class="muted small block">{{ e.label }}</span>
+          </div>
+          {% if m.owned %}
+          <form method="post" action="/mailboxes/{{ m.row.id }}/senders/{{ e.id }}/remove">
+            {{ csrf() }}
+            <button class="btn btn-ghost btn-small" type="submit" aria-label="Remove {{ e.value }}">Remove</button>
+          </form>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted small">None yet. On any email report, choose "This is safe" or "This is fake" and we will remember the sender.</p>
+      {% endif %}
+      {% if m.owned and m.row.status != "disconnected" %}
+      <form method="post" action="/mailboxes/{{ m.row.id }}/recheck" class="recheck-form">
+        {{ csrf() }}
+        <button class="btn btn-quiet btn-small" type="submit">Re-check last 7 days</button>
+        <span class="muted small">Checks recent email again with our latest rules and your choices above.</span>
+      </form>
+      {% endif %}
+    </section>
   </article>
   {% endfor %}
 </section>

@@ -44,7 +44,8 @@ DEFAULT_CACHE_TTL_S = 600.0
 # Domains on the popular list are, by construction, old. Reporting a large age
 # lets callers treat them uniformly instead of special-casing "unknown".
 POPULAR_DOMAIN_AGE_DAYS = 3650
-_POPULAR_SUFFIXES = (".gov", ".mil", ".edu", ".gov.uk", ".ac.uk", ".edu.au", ".gov.au", ".gc.ca")
+# ``.google`` is a brand top-level domain: only Google can register under it.
+_POPULAR_SUFFIXES = (".gov", ".mil", ".edu", ".gov.uk", ".ac.uk", ".edu.au", ".gov.au", ".gc.ca", ".google")
 
 
 @runtime_checkable
@@ -62,8 +63,14 @@ class IntelClient(Protocol):
 
 
 @lru_cache(maxsize=1)
+def brand_shorteners() -> frozenset[str]:
+    """Shorteners that only redirect to their owner's own sites (``w-mt.co``)."""
+    return cached_lines("brand_shorteners.txt")
+
+
+@lru_cache(maxsize=1)
 def popular_domains() -> frozenset[str]:
-    return cached_lines("popular_domains.txt") | brand_domains()
+    return cached_lines("popular_domains.txt") | brand_domains() | brand_shorteners()
 
 
 @lru_cache(maxsize=1)
@@ -80,6 +87,12 @@ def is_popular(domain: str) -> bool:
     if rd in popular_domains():
         return True
     return rd.endswith(_POPULAR_SUFFIXES)
+
+
+def is_brand_shortener(domain: str) -> bool:
+    if not domain:
+        return False
+    return registrable_domain(domain.strip().lower().rstrip(".")) in brand_shorteners()
 
 
 def is_tracking_domain(domain: str) -> bool:

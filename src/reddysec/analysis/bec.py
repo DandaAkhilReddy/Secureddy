@@ -51,10 +51,31 @@ _WIRE_CONTEXT_RE = re.compile(
     r"settlement statement|earnest money|down payment|closing disclosure|funds? transfer|bank transfer)\b",
     re.IGNORECASE,
 )
-_GIFT_CARD_RE = re.compile(
-    r"\b(?:gift ?cards?|e-?gift|(?:apple|itunes|google play|steam|ebay|amazon|visa|vanilla|target|walmart|sephora|xbox|"
-    r"playstation|razer gold|roblox) ?(?:gift )?cards?|scratch (?:off )?the (?:back|code|pin)|"
-    r"send (?:me )?(?:the )?(?:codes?|pins?|pictures? of the cards?)|card (?:codes?|pins?|numbers?))\b",
+# Gift-card scams need three things: gift cards, a request to buy them, and a
+# hand-off of the codes. Mentioning gift cards is not enough: every retailer's
+# receipt and promo does ("Shop gift cards", "Give the gift of...", a gift card
+# as an order line or a payment method).
+_GIFT_MENTION_RE = re.compile(
+    r"\b(?:gift ?cards?|e-?gift ?cards?|(?:apple|itunes|google play|steam|ebay|amazon|visa|vanilla|target|walmart|"
+    r"sephora|xbox|playstation|razer gold|roblox) (?:gift )?cards?)\b",
+    re.IGNORECASE,
+)
+_GIFT_REQUEST_RE = re.compile(
+    r"\b(?:buy|purchase|get|pick up|grab|order|picked up|bought|purchased)\b[^.!?\n]{0,60}?"
+    r"\b(?:gift ?cards?|(?:apple|itunes|google play|steam|ebay|amazon|visa|vanilla|target|walmart|sephora|xbox|"
+    r"playstation|razer gold|roblox) (?:gift )?cards?)\b",
+    re.IGNORECASE,
+)
+_GIFT_HANDOFF_RE = re.compile(
+    r"\b(?:scratch(?:ed)? (?:off )?(?:the )?(?:back|codes?|pins?|silver|strip|panel)|"
+    r"(?:send|email|e-mail|text|share|forward|give|read|type)\b[^.!?\n]{0,40}?"
+    r"\b(?:codes?|pins?|card numbers?|claim codes?|redemption codes?|photos?|pictures?|pics?|images?|snapshots?)\b|"
+    r"(?:photos?|pictures?|pics?|images?|snapshots?) of (?:the )?(?:back of )?(?:the |each |all )?(?:gift )?cards?)",
+    re.IGNORECASE,
+)
+_GIFT_DIRECT_RE = re.compile(
+    r"\b(?:how many (?:gift )?cards|i need you to (?:get|buy|purchase|pick up|grab)\b[^.!?\n]{0,40}?cards?|"
+    r"(?:surprise|reward|appreciate) (?:the )?(?:staff|team|employees|clients)\b[^.!?\n]{0,40}?gift ?cards?)",
     re.IGNORECASE,
 )
 _SECRECY_RE = re.compile(
@@ -112,6 +133,23 @@ def _text_for(parsed: ParsedMessage) -> str:
         body = body[:MAX_BODY_FOR_ANALYSIS]
     names = " ".join(a.filename for a in parsed.attachments if not a.is_inline)
     return f"{parsed.subject}\n{body}\n{names}"
+
+
+def gift_card_request(text: str) -> list[str]:
+    """Phrases showing a request to buy gift cards and hand over the codes, or ``[]``.
+
+    Fires on request + hand-off ("buy 5 Apple gift cards ... send me photos of
+    the codes") or on an unambiguous ask ("how many gift cards can you get"),
+    never on a mention alone ("Shop gift cards", "Gift card: $25.00").
+    """
+    if not _GIFT_MENTION_RE.search(text):
+        return []
+    request = [m.group(0) for m in _GIFT_REQUEST_RE.finditer(text)]
+    handoff = [m.group(0) for m in _GIFT_HANDOFF_RE.finditer(text)]
+    direct = [m.group(0) for m in _GIFT_DIRECT_RE.finditer(text)]
+    if (request and handoff) or direct:
+        return sorted({p.lower().strip() for p in direct + request + handoff})
+    return []
 
 
 def _signature_domains(text: str) -> list[str]:
@@ -176,14 +214,14 @@ def bec_signals(
             )
         )
 
-    gift = _GIFT_CARD_RE.findall(text)
+    gift = gift_card_request(text)
     if gift:
         signals.append(
             make_signal(
                 "bec.gift_card", SignalStage.BEC, 50,
-                "Asks for gift cards or card codes",
-                "No real executive, agency or friend needs gift-card codes by email.",
-                phrases=sorted({g.lower() for g in gift})[:5],
+                "Asks you to buy gift cards and send the codes",
+                "No real boss, company, agency or friend asks for gift-card codes by email.",
+                phrases=gift[:5],
             )
         )
 

@@ -2,66 +2,108 @@
 {% from "_macros.html" import chip, csrf, signals, sender with context %}
 {% block title %}{{ message.subject or "Email report" }} · Secureddy{% endblock %}
 {% block content %}
-<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><span>Email report</span></nav>
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><a href="/messages">Email</a><span>/</span><span>Report</span></nav>
 
-<header class="page-head report-head">
-  <div class="report-title">
-    <h1>{{ message.subject or "(no subject)" }}</h1>
-    <p class="muted">From {{ sender(message) }} · to {{ mailbox.address }} ·
-      <time datetime="{{ message.received_at.isoformat() }}">{{ message.received_at | dt }}</time></p>
-  </div>
-  <div class="verdict-block">
-    {{ chip(report.chip) }}
-  </div>
-</header>
-
-<section class="card summary-card">
+{# 1. The verdict, in one sentence #}
+<header class="page-head verdict-head verdict-{{ report.chip.tone }}">
+  <div class="verdict-block">{{ chip(report.chip) }}</div>
+  <h1 class="headline">{{ report.headline }}</h1>
   <p class="summary">{{ report.summary }}</p>
   {% if report.note %}<p class="note">{{ report.note }}</p>{% endif %}
   {% if report.override_note %}<p class="note">Analyst's note: {{ report.override_note }}</p>{% endif %}
-  {% if report.lane %}<p class="muted small">{{ report.lane }}.</p>{% endif %}
-</section>
+  <p class="muted small report-meta">
+    <span class="report-subject">{{ message.subject or "(no subject)" }}</span> &middot; from {{ sender(message) }} &middot; to {{ mailbox.address }} &middot;
+    <time datetime="{{ message.received_at.isoformat() }}">{{ message.received_at | dt }}</time>
+  </p>
+</header>
 
-<section class="card">
-  <h2>What you can do</h2>
+{# 4. What you can do (kept near the top: it is what the reader came for) #}
+<section class="card action-bar" aria-labelledby="actions-title">
+  <h2 id="actions-title">What do you want to do?</h2>
   <div class="actions actions-wrap">
+    {% if report.can_mark_safe %}
+    <form method="post" action="/messages/{{ message.id }}/safe">
+      {{ csrf() }}
+      <button class="btn btn-primary" type="submit">This is safe &mdash; I know this sender</button>
+    </form>
+    {% endif %}
+    {% if report.can_mark_fake %}
+    <form method="post" action="/messages/{{ message.id }}/fake" data-confirm="Mark this sender as fake? Their email will go to Quarantine from now on.">
+      {{ csrf() }}
+      <button class="btn btn-danger" type="submit">This is fake</button>
+    </form>
+    {% endif %}
+    {% if report.can_recheck %}
+    <form method="post" action="/messages/{{ message.id }}/recheck">
+      {{ csrf() }}
+      <button class="btn btn-quiet" type="submit">Check again</button>
+    </form>
+    {% endif %}
     {% if report.can_release %}
     <form method="post" action="/messages/{{ message.id }}/release" data-confirm="This email was judged dangerous. Release it to your inbox anyway?">
       {{ csrf() }}
-      <button class="btn btn-danger" type="submit">Release to my inbox</button>
+      <button class="btn btn-quiet" type="submit">Release to my inbox</button>
     </form>
     {% endif %}
-    <form method="post" action="/messages/{{ message.id }}/review" class="inline-form">
-      {{ csrf() }}
-      <input class="input" type="text" name="note" placeholder="Anything we should know? (optional)" maxlength="500">
-      <button class="btn btn-quiet" type="submit">Ask the concierge to review</button>
-    </form>
   </div>
-  <div class="feedback">
-    <span class="muted">Was our verdict right?</span>
-    <form method="post" action="/messages/{{ message.id }}/feedback">
-      {{ csrf() }}
-      <input type="hidden" name="verdict" value="fine">
-      <button class="btn btn-ghost btn-small" type="submit">This is fine</button>
-    </form>
-    <form method="post" action="/messages/{{ message.id }}/feedback">
-      {{ csrf() }}
-      <input type="hidden" name="verdict" value="bad">
-      <button class="btn btn-ghost btn-small" type="submit">This is bad</button>
-    </form>
-  </div>
+  <form method="post" action="/messages/{{ message.id }}/review" class="inline-form concierge-form">
+    {{ csrf() }}
+    <label class="sr-only" for="review-note">Note for the concierge</label>
+    <input class="input" id="review-note" type="text" name="note" placeholder="Anything we should know? (optional)" maxlength="500">
+    <button class="btn btn-quiet" type="submit">Ask the concierge to review</button>
+  </form>
+  {% if report.can_mark_safe or report.can_mark_fake %}
+  <p class="help">"This is safe" teaches us to trust this sender next time. "This is fake" sends their email to Quarantine from now on. You can undo either on the Mailboxes page.</p>
+  {% endif %}
 </section>
 
-{% if report.signals %}
-<section class="card">
-  <h2>What we found</h2>
-  {{ signals(report.signals) }}
+{# 2. Why we think this #}
+{% if report.reasons or report.good_signs %}
+<section class="card" aria-labelledby="why-title">
+  <h2 id="why-title">Why we think this</h2>
+  {% if report.reasons %}
+  <ul class="reasons">
+    {% for r in report.reasons %}
+    <li class="reason reason-{{ r.tone }}">
+      <h3 class="reason-title">{{ r.title }}</h3>
+      {% if r.meaning %}<p class="reason-meaning">{{ r.meaning }}</p>{% endif %}
+      {% if r.todo %}<p class="reason-todo"><span class="reason-todo-label">What to do:</span> {{ r.todo }}</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">We found nothing wrong with this email.</p>
+  {% endif %}
+  {% if report.good_signs %}
+  <h3 class="good-title">Good signs</h3>
+  <ul class="reasons">
+    {% for g in report.good_signs %}
+    <li class="reason reason-good">
+      <p class="reason-title">{{ g.title }}</p>
+      {% if g.meaning %}<p class="reason-meaning">{{ g.meaning }}</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </section>
 {% endif %}
 
-{% if report.urls %}
-<section class="card">
-  <h2>Links in this email</h2>
+{# 3. What we checked #}
+{% if report.verdict_available %}
+<section class="card" aria-labelledby="checked-title">
+  <h2 id="checked-title">What we checked</h2>
+  <ul class="checklist">
+    {% for c in report.checks %}
+    <li class="check-item check-{{ 'ok' if c.ok else ('bad' if c.ok is sameas false else 'none') }}">
+      <span class="check-mark" aria-hidden="true">{% if c.ok %}&#10003;{% elif c.ok is sameas false %}&#10007;{% else %}&ndash;{% endif %}</span>
+      <span class="sr-only">{% if c.ok %}Passed:{% elif c.ok is sameas false %}Failed:{% else %}Note:{% endif %}</span>
+      <span>{{ c.label }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+
+  {% if report.urls %}
+  <h3 class="sub-title">Links in this email</h3>
   <p class="help">Links are shown as text on purpose. Open them only through the Reading Room, which runs the page on our servers and shows you a live picture of it.</p>
   <ul class="url-list">
     {% for u in report.urls %}
@@ -79,26 +121,23 @@
       {% elif u.detonated %}
       <p class="muted small">Opened in our sandbox; no picture was kept.</p>
       {% endif %}
-      {{ signals(u.signals) }}
       {% if room_enabled %}
       <form method="post" action="/room/start" class="room-form">
         {{ csrf() }}
         <input type="hidden" name="url" value="{{ u.url }}">
         <input type="hidden" name="message_id" value="{{ message.id }}">
-        <button class="btn btn-primary" type="submit">Open in Reading Room</button>
+        <button class="btn btn-quiet btn-small" type="submit">Open in Reading Room</button>
       </form>
       {% else %}
-      <button class="btn btn-quiet" type="button" disabled aria-disabled="true" title="The Reading Room is not switched on for this server">Reading Room unavailable</button>
+      <button class="btn btn-quiet btn-small" type="button" disabled aria-disabled="true" title="The Reading Room is not switched on for this server">Reading Room unavailable</button>
       {% endif %}
     </li>
     {% endfor %}
   </ul>
-</section>
-{% endif %}
+  {% endif %}
 
-{% if report.attachments %}
-<section class="card">
-  <h2>Files attached</h2>
+  {% if report.attachments %}
+  <h3 class="sub-title">Files attached</h3>
   <ul class="attachment-list">
     {% for a in report.attachments %}
     <li class="attachment-item">
@@ -110,23 +149,39 @@
         {% endif %}
       </div>
       {% if a.safe_copy_url %}<p class="muted small">The safe copy is a flattened version with anything active removed.</p>{% endif %}
-      {{ signals(a.signals) }}
     </li>
     {% endfor %}
   </ul>
+  {% endif %}
 </section>
 {% endif %}
 
-<section class="card details">
-  <h2>Details</h2>
+{# 5. Technical details, for the curious and for our analysts #}
+<details class="card details tech">
+  <summary><h2>Technical details</h2></summary>
   <dl class="dl">
     <dt>Report id</dt><dd><code>{{ message.id }}</code></dd>
     {% if report.score is not none %}<dt>Risk score</dt><dd>{{ report.score }} out of 100</dd>{% endif %}
+    {% if report.previous_level %}<dt>Before re-check</dt><dd>{{ report.previous_level }}</dd>{% endif %}
+    {% if report.lane %}<dt>How we checked</dt><dd>{{ report.lane }}</dd>{% endif %}
+    <dt>Sender verified (DMARC)</dt><dd>{{ report.verified_domain or "No" }}</dd>
     {% if report.analyzed_at %}<dt>Checked</dt><dd>{{ report.analyzed_at | dt }}</dd>{% endif %}
     <dt>Links</dt><dd>{{ message.url_count }}</dd>
     <dt>Files</dt><dd>{{ message.attachment_count }}</dd>
     {% if report.engine_version %}<dt>Engine</dt><dd>{{ report.engine_version }}</dd>{% endif %}
     {% if is_staff %}<dt>State</dt><dd><code>{{ message.state }}</code></dd>{% endif %}
   </dl>
-</section>
+  {% if report.signals %}
+  <h3 class="sub-title">Every signal, with its weight</h3>
+  {{ signals(report.signals) }}
+  {% endif %}
+  {% for u in report.urls if u.signals %}
+  <h3 class="sub-title">Signals for <code class="url-text">{{ u.url }}</code></h3>
+  {{ signals(u.signals) }}
+  {% endfor %}
+  {% for a in report.attachments if a.signals %}
+  <h3 class="sub-title">Signals for {{ a.filename }}</h3>
+  {{ signals(a.signals) }}
+  {% endfor %}
+</details>
 {% endblock %}

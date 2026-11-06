@@ -1,0 +1,37 @@
+Delivered-To: client@gmail.com
+Received: from m204-220-184-9.mailgun.net (m204-220-184-9.mailgun.net. [204.220.184.9]) by mx.google.com with ESMTPS id z2si; Fri, 06 Nov 2026 10:00:56 -0800 (PST)
+Return-Path: <bounce+76d2a2.ded8ff-client=gmail.com@email.cascadebloodcenter.org>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@email.cascadebloodcenter.org header.s=mx header.b=Lk3Jh2;
+       spf=pass (google.com: domain of bounce+76d2a2.ded8ff-client=gmail.com@email.cascadebloodcenter.org designates 204.220.184.9 as permitted sender) smtp.mailfrom="bounce+76d2a2.ded8ff-client=gmail.com@email.cascadebloodcenter.org";
+       dmarc=pass (p=QUARANTINE sp=QUARANTINE dis=NONE) header.from=email.cascadebloodcenter.org
+X-Mailgun-Sid: WyJmaWN0aW9uYWwiXQ==
+X-Feedback-Id: donors@email.cascadebloodcenter.org::000000000000000000000000:mailgun
+Sender: donors@email.cascadebloodcenter.org
+Date: Fri, 06 Nov 2026 18:00:56 +0000
+Mime-Version: 1.0
+Subject: We're proud to champion the "Give Blood Week" drive with our league partners!
+From: Cascade Blood Center <donors@email.cascadebloodcenter.org>
+Reply-To: schedule@cascadebloodcenter.org
+To: client@gmail.com
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+List-Unsubscribe: <https://donate.cascadebloodcenter.org/donor/emailprefs/update/4c2d9e1f0a8b7c6d5e4f3a2b1c0d9e8f/22052>
+Message-Id: <20261106180056.0a1b2c3d4e5f6a7b@email.cascadebloodcenter.org>
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body>
+<h1>Give Blood Week is here</h1>
+<p>This month we partner with the Northwest College League. Every donor who registers at
+<a href="https://donate.cascadebloodcenter.org/donor/schedules/drive_schedule/9a8b7c6d5e4f3a2b1c0d">nwcollegeleague.org/giveblood</a>
+helps their school win the cup.</p>
+<p>Already donated? Submit your donation at
+<a href="https://donate.cascadebloodcenter.org/donor/survey/1f2e3d4c5b6a79880a1b2c3d">nwcollegeleague.org/giveblood/submit</a>.</p>
+<p><a href="https://donate.cascadebloodcenter.org/donor/schedules/zip/7d6c5b4a3f2e1d0c9b8a">Find a drive near you</a></p>
+<p>Thank you for saving lives.</p>
+<p>Cascade Blood Center<br>
+In partnership with the Northwest College League<br>
+www.nwcollegeleague.org<br>
+cascadebloodcenter.org | 1-800-555-0142</p>
+<p style="font-size:11px"><a href="https://donate.cascadebloodcenter.org/donor/emailprefs/update/4c2d9e1f0a8b7c6d5e4f3a2b1c0d9e8f/22052">Update email preferences</a></p>
+</body></html>

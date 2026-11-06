@@ -81,6 +81,12 @@ What runs today, end to end, in this repository:
   Docker (hardened container on a dirty network), Azure Container Instances
   (one hypervisor-isolated container group per detonation).
 - Reading Room: pixel-streamed isolated browser with safe-copy downloads.
+- Sender trust (`analysis/trust.py`): mail Google verified as coming from a
+  mailing-list sender is not accused on wording alone; lookalikes, known-bad
+  sites, credential pages, malware and dangerous files always count.
+- Learning from the client: "This is safe" / "This is fake" on every report,
+  a trusted & blocked senders list per mailbox, and "Check again" /
+  "Re-check last 7 days" to re-label mail with today's rules.
 - Web app: dashboard, reports with sandbox screenshots, mailbox onboarding,
   concierge queue, audit log, TOTP.
 - Azure infrastructure as Bicep (validated), Dockerfiles, CI/CD, runbooks.

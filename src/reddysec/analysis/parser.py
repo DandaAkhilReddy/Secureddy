@@ -215,7 +215,11 @@ def parse_authentication_results(values: Iterable[str], from_domain: str) -> Aut
             aligned = True
         elif spf == "pass" and mailfrom and from_rd and urls.registrable_domain(mailfrom) == from_rd:
             aligned = True
-    return AuthResults(spf=spf, dkim=dkim, dmarc=dmarc, dkim_domain=dkim_domain, aligned=aligned, raw=" | ".join(values))
+    dmarc_from = _domain_of(merged.get("dmarc", {}).get("header.from") or "") or None
+    return AuthResults(
+        spf=spf, dkim=dkim, dmarc=dmarc, dkim_domain=dkim_domain, aligned=aligned, dmarc_from=dmarc_from,
+        raw=" | ".join(values),
+    )
 
 
 # --------------------------------------------------------------------------- bodies and parts

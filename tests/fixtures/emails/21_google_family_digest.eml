@@ -1,0 +1,28 @@
+Delivered-To: client@gmail.com
+Received: by mail-sor-f69.google.com with SMTP id 6a1803df08f44-6fa1b2c3d4eso1234567d6.2 for <client@gmail.com>; Thu, 05 Nov 2026 06:30:02 -0800 (PST)
+Return-Path: <3abcDEFghIJ-family-cc@agents.bounces.google.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@agents.google header.s=20230601 header.b=Mn4Bv6;
+       spf=pass (google.com: domain of 3abcdefghij-family-cc@agents.bounces.google.com designates 209.85.220.69 as permitted sender) smtp.mailfrom=3abcDEFghIJ-family-cc@agents.bounces.google.com;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=agents.google
+From: Family CC <jordanellis7-family-cc@agents.google>
+To: client@gmail.com
+Subject: Your family digest for Thursday, November 5
+Date: Thu, 05 Nov 2026 14:30:02 +0000
+Message-ID: <000000000000a1b2c3d4e5f60718@google.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: 7bit
+
+<!doctype html><html><body>
+<h2>Good morning, Jordan</h2>
+<p>Here is what is coming up for your family today.</p>
+<ul>
+<li>Soccer practice moved to 5:30pm. <a href="https://docs.google.com/document/d/1Xy2Zw3Vu4Ts5Rq6Po7Nm8Lk9Ji0Hg/edit">Open the team schedule</a></li>
+<li>School picture day forms are due Friday. <a href="https://gmail.app.goo.gl/Ab3Cd5Ef7Gh9Jk2L">Open the email from the school</a></li>
+<li>Your shared recipe list was updated. <a href="https://labs.google.com/familycc/lists/8f7e6d5c4b3a2918">See the list</a></li>
+<li>The weekend chore tracker has new changes. <a href="https://github.com/jordanellis/chores/pull/12">Review on GitHub</a></li>
+</ul>
+<p style="font-size:11px">You are getting this because you turned on daily digests in Family CC, an experiment from Google Labs.
+<a href="https://labs.google.com/familycc/settings">Change your settings</a></p>
+</body></html>

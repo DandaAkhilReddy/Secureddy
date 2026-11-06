@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -137,6 +137,33 @@ class Contact(Base):
     replied_to: Mapped[bool] = mapped_column(Boolean, default=False)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SenderFeedbackRow(Base):
+    """What the client told us about a sender: "This is safe" or "This is fake".
+
+    A separate table on purpose: deployments that build their schema with
+    ``create_all`` (the Azure dev database) only create missing tables, so new
+    columns on existing tables would never appear there.
+
+    ``scope`` is ``domain`` (a registrable domain, only ever recorded from a
+    message Google verified) or ``address`` (one full address). ``authenticated``
+    records whether the message the client judged was verified; an address
+    trusted from an unverified message is weak trust (see analysis.trust).
+    """
+
+    __tablename__ = "sender_feedback"
+    __table_args__ = (UniqueConstraint("mailbox_id", "scope", "value", name="uq_sender_feedback_entry"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mailbox_id: Mapped[str] = mapped_column(String(40), ForeignKey("mailboxes.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(10))  # domain | address
+    value: Mapped[str] = mapped_column(String(320))
+    decision: Mapped[str] = mapped_column(String(10))  # trusted | blocked
+    authenticated: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_message_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ReadingRoomRow(Base):

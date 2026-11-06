@@ -1,79 +1,126 @@
-# Email service provider click-tracking and open-tracking domains. Links on
-# these hosts are redirectors by design: following them is expected to land on
-# another domain, and an open-tracking pixel is not a page worth detonating.
-# One registrable domain per line; '#' starts a comment.
+# Email service provider (ESP) click-, open- and redirect-tracking domains.
+#
+# Links on these hosts are redirectors by design: following one is expected to
+# land on another domain, and an open-tracking pixel is not a page worth
+# opening. What being listed here does, and does not, buy a link:
+#
+# * No "long tracking code" signal (url.opaque_token_unknown_host).
+# * Hopping from one of these to the real destination is not a suspicious
+#   redirect, and a link whose text names the sender's own site but whose href
+#   goes through one of these is not a "text does not match" trick.
+# * It does NOT make the destination trusted: the link is still opened in the
+#   sandbox and the page it lands on is judged on its own.
+#
+# Brands also run click tracking on their own subdomains (click.e.example.com,
+# links.example.com, email.example.com, mkt.example.com). Those need no entry:
+# analysis/trust.py treats every host under the sender's own Google-verified
+# domain as the sender's, so "click.attacker.example" earns nothing unless the
+# mail really came from attacker.example (and then it only reaches itself).
+#
+# One registrable domain per line, sorted; '#' starts a comment.
+activecampaign.com
+activehosted.com
+app.link
+aweber.com
+awstrack.me
+beehiiv.com
+bnc.lt
+braze.com
+braze.eu
+brevo.com
+campaign-archive.com
+ccsend.com
+cirrusinsight.com
+ck.page
+cmail1.com
+cmail10.com
+cmail19.com
+cmail2.com
+cmail20.com
+cmail3.com
+cmail4.com
+cmail5.com
+cmail6.com
+cmail7.com
+cmail8.com
+cmail9.com
+constantcontact.com
+convertkit-mail.com
+convertkit-mail2.com
+createsend.com
+createsend1.com
+createsend2.com
+createsend3.com
+createsend4.com
+createsend5.com
+ct.sendgrid.net
+customer.io
+customeriomail.com
+dmanalytics1.com
+dmanalytics2.com
+dotdigital-email.com
+drip.com
+eloqua.com
+emarsys.net
+en25.com
+exacttarget.com
+exacttarget.net
+exct.net
+getresponse.com
+hs-sites.com
+hsforms.com
+hubspot.com
+hubspotemail.net
+hubspotlinks.com
+iterable.com
+klaviyo.com
+klaviyomail.com
+klclick.com
+klclick1.com
+klclick2.com
+klclick3.com
 list-manage.com
 list-manage1.com
 list-manage2.com
+list-unsubscribe.com
 mailchimp.com
-mcsv.net
-mandrillapp.com
-mcusercontent.com
-campaign-archive.com
-sendgrid.net
-sendgrid.com
-ct.sendgrid.net
-sendibm.com
-sendinblue.com
-brevo.com
-hubspot.com
-hubspotlinks.com
-hubspotemail.net
-hs-sites.com
-hsforms.com
-constantcontact.com
-rs6.net
-ccsend.com
-exacttarget.com
-exct.net
-mkt.com
-marketo.com
-mktoweb.com
-mktoresp.com
-pardot.com
-klaviyo.com
-klclick.com
-klclick1.com
-braze.com
-iterable.com
-sailthru.com
-customeriomail.com
-cmail19.com
-cmail20.com
-createsend.com
-createsend1.com
-mailgun.org
+mailerlite.com
+mailgun.com
 mailgun.net
-sparkpostmail.com
+mailgun.org
+mailjet.com
+mailtrack.io
+mandrillapp.com
+marketingcloudapps.com
+marketo.com
+mcsv.net
+mcusercontent.com
+mixmax.com
+mjt.lu
+mkt.com
+mktoresp.com
+mktoweb.com
+mlsend.com
+omnisend.com
+outreach.io
+pardot.com
 postmarkapp.com
 pstmrk.it
-convertkit-mail.com
-convertkit-mail2.com
-awstrack.me
-mailjet.com
-mjt.lu
-emarsys.net
 responsys.net
-eloqua.com
-en25.com
-dotdigital-email.com
-dmanalytics1.com
-dmanalytics2.com
-mailtrack.io
-streak.com
-yesware.com
-mixmax.com
-cirrusinsight.com
+rs6.net
+rsgsv.net
+sailthru.com
 salesloft.com
-outreach.io
-getresponse.com
-aweber.com
-drip.com
-activehosted.com
-activecampaign.com
-omnisend.com
-mailerlite.com
-mlsend.com
-beehiiv.com
+sendgrid.com
+sendgrid.info
+sendgrid.net
+sendibm.com
+sendinblue.com
+sfmc-content.com
+sparkpost.com
+sparkpostmail.com
+spgo.io
+spmailtechnology.com
+streak.com
 substackcdn.com
-list-unsubscribe.com
+yesware.com

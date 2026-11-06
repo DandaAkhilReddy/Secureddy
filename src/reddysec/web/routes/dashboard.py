@@ -36,6 +36,7 @@ async def dashboard(request: Request, user: UserRow = Depends(current_user)) -> 
             "first_name": presenters.first_name(user),
             "sentence": presenters.weekly_sentence(counts, has_mailboxes=bool(active)),
             "counts": counts,
+            "stat_cards": presenters.stat_cards(counts),
             "mailboxes": [
                 {"row": m, "status": presenters.mailbox_status_chip(m), "mode": presenters.mode_chip(m)}
                 for m in mailboxes

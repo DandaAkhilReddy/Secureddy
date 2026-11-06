@@ -72,3 +72,45 @@ class PolicyConfig(BaseModel):
     blocked_senders: list[str] = Field(default_factory=list)
     # Domains whose one-time links must never be followed by the detonator.
     never_detonate_domains: list[str] = Field(default_factory=list)
+
+
+class ClientFeedback(BaseModel):
+    """What the client told us about senders ("This is safe" / "This is fake").
+
+    Values are lowercase. Domains are registrable domains (``walmart.com``),
+    addresses are full addresses. The engine decides what each entry is worth
+    (see ``reddysec.analysis.trust``); this object only carries the lists.
+
+    * ``trusted_domains``: apply only to mail that Google (DMARC) confirmed
+      came from that domain. A message that merely claims the domain gets
+      nothing, so a spoof cannot ride the client's trust.
+    * ``verified_addresses``: one address trusted from a verified message
+      (for example a person's Gmail address); applies only when the new
+      message is verified too.
+    * ``trusted_addresses``: weak trust from an unverified message. It lowers
+      the score a little; links are still opened in the sandbox.
+    * ``blocked_domains`` / ``blocked_addresses``: always apply, verified or
+      not. Blocking can only make us stricter.
+    * ``blocked_unverified_addresses``: "This is fake" on a message Google
+      could not verify. Someone may have forged the address, so only mail
+      from it that is *also* unverified is blocked; the real sender's verified
+      mail still gets through.
+    """
+
+    trusted_domains: list[str] = Field(default_factory=list)
+    verified_addresses: list[str] = Field(default_factory=list)
+    trusted_addresses: list[str] = Field(default_factory=list)
+    blocked_domains: list[str] = Field(default_factory=list)
+    blocked_addresses: list[str] = Field(default_factory=list)
+    blocked_unverified_addresses: list[str] = Field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.trusted_domains
+            or self.verified_addresses
+            or self.trusted_addresses
+            or self.blocked_domains
+            or self.blocked_addresses
+            or self.blocked_unverified_addresses
+        )

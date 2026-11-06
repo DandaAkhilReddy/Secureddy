@@ -3,6 +3,7 @@
 Order of operations::
 
     static signals (sender, BEC, per-URL, per-attachment)
+      -> sender trust (analysis.trust: verified bulk senders, client feedback)
       -> triage lane
       -> [DETONATE] open selected links/files in the chamber, concurrently
          (the LLM reviewer, if any, runs alongside)
@@ -33,6 +34,7 @@ from reddysec.core.logging import get_logger
 from reddysec.models import (
     Attachment,
     AttachmentVerdict,
+    ClientFeedback,
     DetonationJob,
     DetonationKind,
     DetonationResult,
@@ -60,6 +62,15 @@ from .headers import sender_signals
 from .intel import IntelClient
 from .policy import choose_lane, select_attachments_to_detonate, select_urls_to_detonate, sender_is_blocked
 from .scoring import attachment_verdict, combine, dedupe_by_code, summarize, url_verdict
+from .trust import (
+    SenderTrust,
+    assess_sender,
+    dedupe_opaque_tokens,
+    protected_weight,
+    soften_dynamic,
+    soften_static,
+    trust_signals,
+)
 from .urls import registrable_domain
 
 log = get_logger(__name__)
@@ -82,6 +93,10 @@ class AnalysisContext:
     ``contact_domains`` (an addition to the original contract, defaulting to
     empty) lets the worker pass the registrable domains of people the client
     corresponds with, so lookalikes of *those* domains are caught too.
+
+    ``feedback`` carries what the client told us about senders ("This is
+    safe" / "This is fake"). It defaults to empty; ``analysis.trust`` decides
+    what each entry is worth.
     """
 
     policy: PolicyConfig
@@ -94,6 +109,7 @@ class AnalysisContext:
     max_concurrent_detonations: int = 2
     now: Callable[[], datetime] = utcnow
     contact_domains: tuple[str, ...] = field(default_factory=tuple)
+    feedback: ClientFeedback | None = None
 
 
 @dataclass
@@ -211,17 +227,20 @@ async def _analyze(parsed: ParsedMessage, ctx: AnalysisContext, started: float) 
 
     # ---- static -----------------------------------------------------------
     sender = sender_signals(parsed, history, contacts)
-    bec = bec_signals(parsed, history, contacts)
+    trust = assess_sender(parsed, contact_domains=contacts, feedback=ctx.feedback, sender_signals=sender)
+    bec = soften_static(bec_signals(parsed, history, contacts), trust)
+    sender = soften_static(sender, trust)
 
     url_static: dict[str, list[Signal]] = {}
     url_results = await asyncio.gather(
-        *(url_static_signals(u, ctx.intel, history, contacts) for u in parsed.urls), return_exceptions=True
+        *(url_static_signals(u, ctx.intel, history, contacts, trust) for u in parsed.urls), return_exceptions=True
     )
     for url, sigs in zip(parsed.urls, url_results, strict=True):
         if isinstance(sigs, BaseException):
             log.warning("url_static_failed", url=url.normalized, error=str(sigs))
             sigs = []
-        url_static.setdefault(url.normalized, []).extend(sigs)
+        url_static.setdefault(url.normalized, []).extend(soften_static(sigs, trust))
+    dedupe_opaque_tokens(url_static)
 
     attachment_static: dict[str, list[Signal]] = {}
     analysable = [a for a in parsed.attachments if not a.is_inline or not (a.content_type or "").startswith("image/")]
@@ -237,7 +256,7 @@ async def _analyze(parsed: ParsedMessage, ctx: AnalysisContext, started: float) 
             )
         attachment_static[_att_key(att)] = sigs
 
-    lane = choose_lane(parsed, history, ctx.policy, url_static, attachment_static)
+    lane = choose_lane(parsed, history, ctx.policy, url_static, attachment_static, trust)
     policy_signals: list[Signal] = []
     if sender_is_blocked(parsed, ctx.policy):
         policy_signals.append(
@@ -254,7 +273,7 @@ async def _analyze(parsed: ParsedMessage, ctx: AnalysisContext, started: float) 
         llm_task = asyncio.create_task(_run_llm(ctx.llm, parsed, _static_summary(static_all)))
     try:
         return await _finish(parsed, ctx, started, lane, sender, bec, policy_signals, url_static, attachment_static,
-                             analysable, llm_task)
+                             analysable, llm_task, trust)
     finally:
         if llm_task is not None and not llm_task.done():
             llm_task.cancel()
@@ -272,6 +291,7 @@ async def _finish(
     attachment_static: dict[str, list[Signal]],
     analysable: list[Attachment],
     llm_task: asyncio.Task[LlmAssessment | None] | None,
+    trust: SenderTrust | None = None,
 ) -> Verdict:
     """Dynamic analysis, LLM result, combination and the final Verdict."""
     # ---- dynamic ----------------------------------------------------------
@@ -320,7 +340,9 @@ async def _finish(
             if not det.failed:
                 final_rd = _final_domain(url, det.result)
                 age = await _safe_age_lookup(ctx.intel, final_rd)
-            url_dynamic[url.normalized] = dynamic_signals(url.normalized, det.result, age, brands_in_email)
+            url_dynamic[url.normalized] = soften_dynamic(
+                dynamic_signals(url.normalized, det.result, age, brands_in_email), trust or SenderTrust()
+            )
         for (att, _job), det in zip(att_jobs, att_outcomes, strict=True):
             att_detonations[_att_key(att)] = det
             att_dynamic[_att_key(att)] = file_dynamic_signals(att.filename, det.result)
@@ -374,6 +396,10 @@ async def _finish(
         all_signals.extend(v.signals)
     if llm_sig is not None:
         all_signals.append(llm_sig)
+    if trust is not None:
+        # Message-level cap: soft sandbox findings across all links together.
+        all_signals = soften_dynamic(all_signals, trust)
+        all_signals.extend(trust_signals(trust, protected_weight(all_signals)))
 
     score = combine(dedupe_by_code(all_signals))
     level = level_for_score(score)
@@ -415,6 +441,8 @@ async def _finish(
         analyzed_at=_now(ctx),
         duration_ms=int((time.perf_counter() - started) * 1000),
         engine_version=ENGINE_VERSION,
+        verified_domain=trust.aligned_domain if trust is not None else "",
+        bulk_sender=bool(trust is not None and trust.authenticated_bulk_sender),
     )
 
 

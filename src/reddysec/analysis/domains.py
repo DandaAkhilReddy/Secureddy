@@ -215,11 +215,19 @@ def _keyword_patterns() -> tuple[tuple[str, str, re.Pattern[str]], ...]:
     return tuple(pats)
 
 
+# Brand top-level domains: only the brand itself can register names under them.
+BRAND_TLDS: dict[str, str] = {"google": "google"}
+
+
 def brand_for_domain(domain: str) -> str | None:
     """Brand that legitimately owns ``domain`` (host or registrable domain), else None."""
     if not domain:
         return None
-    return _domain_to_brand().get(registrable_domain(domain))
+    rd = registrable_domain(domain)
+    owner = _domain_to_brand().get(rd)
+    if owner is None and "." in rd:
+        owner = BRAND_TLDS.get(rd.rsplit(".", 1)[-1])
+    return owner
 
 
 def legit_domains_for(brand: str) -> frozenset[str]:
@@ -357,7 +365,7 @@ def lookalike_analysis(
         return LookalikeResult()
     rd = (registrable or registrable_domain(host)).lower()
     contacts = _contact_targets(contact_domains)
-    if rd in brand_domains() or rd in {c_rd for _, c_rd in contacts}:
+    if rd in brand_domains() or rd in {c_rd for _, c_rd in contacts} or rd.rsplit(".", 1)[-1] in BRAND_TLDS:
         return LookalikeResult()
 
     _sub, label, suffix = split_host(rd)

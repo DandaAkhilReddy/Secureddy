@@ -5,9 +5,11 @@ The lanes trade latency against certainty:
 * RELEASE_FAST  nothing to open (no links, no real attachments). Sender and
                 BEC checks still run, because wire fraud needs neither.
 * BLOCK         static evidence is already conclusive, or the sender is on the
-                client's block list. No need to spend a sandbox on it.
+                client's block list (policy, or "This is fake"). No need to
+                spend a sandbox on it.
 * TRUSTED       authenticated mail from someone the client actually talks to
-                (or a domain they trust), pointing only at well-known places.
+                (or a domain they trust, in policy or by "This is safe"),
+                pointing only at well-known places.
 * DETONATE      everything else.
 
 URL selection protects the client as much as it protects the sandbox budget:
@@ -32,6 +34,7 @@ from reddysec.models import (
 
 from .dynamic import static_risk
 from .intel import is_popular, is_tracking_domain
+from .trust import SenderTrust
 from .urls import registrable_domain
 
 BLOCK_WEIGHT = 90
@@ -99,11 +102,17 @@ def choose_lane(
     policy: PolicyConfig,
     url_static: Mapping[str, list[Signal]],
     attachment_signals: Mapping[str, list[Signal]] | Iterable[Signal],
+    sender: SenderTrust | None = None,
 ) -> TriageLane:
-    """Pick the triage lane from static evidence alone."""
+    """Pick the triage lane from static evidence alone.
+
+    ``sender`` carries the client's own verdicts: a blocked sender goes
+    straight to BLOCK; a domain the client trusts (and that Google verified
+    for this message) may take the TRUSTED lane like a known correspondent.
+    """
     att_signals = _all_signals(attachment_signals)
     url_signals = _all_signals(url_static)
-    if sender_is_blocked(parsed, policy):
+    if sender_is_blocked(parsed, policy) or (sender is not None and sender.client_blocked):
         return TriageLane.BLOCK
     if any(s.weight >= BLOCK_WEIGHT for s in att_signals + url_signals):
         return TriageLane.BLOCK
@@ -116,7 +125,10 @@ def choose_lane(
         and history.message_count >= 3
         and history.replied_to
     )
-    if sender_authenticated(parsed) and (known_correspondent or sender_is_trusted_domain(parsed, policy)):
+    client_trusted = sender is not None and sender.trusted_domain
+    if sender_authenticated(parsed) and (
+        known_correspondent or client_trusted or sender_is_trusted_domain(parsed, policy)
+    ):
         urls_clean = all(_url_domain_trusted(u, parsed, policy) for u in parsed.urls)
         urls_clean = urls_clean and all(s.weight < DANGEROUS_URL_WEIGHT for s in url_signals)
         attachments_clean = all(s.weight < DANGEROUS_ATTACHMENT_WEIGHT for s in att_signals)

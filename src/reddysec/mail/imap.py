@@ -601,7 +601,9 @@ class ImapConnector:
 
         return await self._run(op)
 
-    async def apply_verdict(self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig) -> None:
+    async def apply_verdict(
+        self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False
+    ) -> None:
         loc = Location.parse(msg.provider_message_id)
         rfc_id = _rfc_message_id(msg.raw)
         quarantine = should_quarantine(verdict, policy)
@@ -617,6 +619,9 @@ class ImapConnector:
             folder, uid, info = found
             if keyword and info.allows_keywords:
                 sess.uid_store(uid, "+FLAGS", [keyword])  # flags travel with a later move
+                if relabel:
+                    stale = [k for k in (KEYWORD_SAFE, KEYWORD_SUSPICIOUS) if k != keyword]
+                    sess.uid_store(uid, "-FLAGS", stale)
             quarantine_folder = self._folder(sess, LABEL_QUARANTINE)
             checking_folder = self._folder(sess, LABEL_PENDING)
             if quarantine:
@@ -637,6 +642,26 @@ class ImapConnector:
         await self._relocate(
             provider_message_id, destination=INBOX, prefer_label=LABEL_QUARANTINE, keyword=KEYWORD_RELEASED
         )
+
+    async def mark_safe(self, provider_message_id: str) -> None:
+        """IMAP has no labels: the verdict lives in a keyword and in the folder.
+        Swap the keyword and bring the message back from Quarantine/Checking."""
+        loc = Location.parse(provider_message_id)
+        rfc_id = await self._resolve_message_id(provider_message_id)
+
+        def op(sess: ImapSession) -> None:
+            prefer = [self._folder(sess, LABEL_QUARANTINE)]
+            found = self._locate(sess, loc, rfc_id, prefer=prefer)
+            if found is None:
+                raise ConnectorError(f"message {provider_message_id} not found", retryable=False)
+            folder, uid, info = found
+            if info.allows_keywords:
+                sess.uid_store(uid, "-FLAGS", [KEYWORD_SUSPICIOUS])
+                sess.uid_store(uid, "+FLAGS", [KEYWORD_SAFE])
+            if folder in (self._folder(sess, LABEL_QUARANTINE), self._folder(sess, LABEL_PENDING)):
+                self._move(sess, uid, INBOX)
+
+        await self._run(op)
 
     async def release_all_pending(self) -> int:
         def op(sess: ImapSession) -> int:
