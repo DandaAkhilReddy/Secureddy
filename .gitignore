@@ -10,3 +10,4 @@ var/
 htmlcov/
 coverage.xml
 .DS_Store
+.coverage
