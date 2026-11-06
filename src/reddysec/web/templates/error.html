@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Secureddy{% endblock %}
+{% block content %}
+<section class="panel panel-narrow error-panel">
+  <p class="muted small">{{ status_code }}</p>
+  <h1>{{ title }}</h1>
+  <p class="lede">{{ message }}</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/">{{ "Back to home" if user else "Go to sign in" }}</a>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,52 @@
+Delivered-To: client@gmail.com
+Received: from na4.docusign.net (na4.docusign.net. [162.248.186.21]) by mx.google.com with ESMTPS id k9si; Wed, 5 Nov 2026 11:40:02 -0800 (PST)
+Return-Path: <dse_NA4@docusign.net>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@docusign.net header.s=s1 header.b=Qw3rTy;
+       spf=pass (google.com: domain of dse_NA4@docusign.net designates 162.248.186.21 as permitted sender) smtp.mailfrom=dse_NA4@docusign.net;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=docusign.net
+From: "Priya Raman via DocuSign" <dse_NA4@docusign.net>
+Reply-To: Priya Raman <priya.raman@hartwell-wealth.com>
+To: client@gmail.com
+Subject: Please DocuSign: Investment Policy Statement 2027.pdf
+Date: Wed, 05 Nov 2026 11:39:55 -0800
+Message-ID: <b7e1c6c0-5d8d-4c7f-9d2e-1f2c3a4b5c6d@docusign.net>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="----=_Part_8842_1.1762365595"
+
+------=_Part_8842_1.1762365595
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Priya Raman sent you a document to review and sign.
+
+REVIEW DOCUMENT: https://na4.docusign.net/Signing/EmailStart.aspx?a=7c2f0e1a-9b3d-4f8e-a1c2-3d4e5f6a7b8c&etti=24&acct=cd3c8e5a-ac4a-4f5b-9b2e-1a2b3c4d5e6f&er=2ad4a3c6
+
+Priya Raman
+Hartwell Wealth Partners
+priya.raman@hartwell-wealth.com
+
+Please review the updated policy statement before our call on Thursday.
+
+Do Not Share This Email
+This email contains a secure link to DocuSign. Please do not share this email, link, or access code with others.
+
+About DocuSign
+Sign documents electronically in just minutes. It's safe, secure, and legally binding.
+
+------=_Part_8842_1.1762365595
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body style="font-family:Helvetica,Arial,sans-serif">
+<table width="100%"><tr><td align="center">
+<img src="https://docucdn-a.akamaihd.net/olive/images/2.44.0/global-assets/ds-logo-default.svg" alt="DocuSign" width="140">
+<h2>Priya Raman sent you a document to review and sign.</h2>
+<a href="https://na4.docusign.net/Signing/EmailStart.aspx?a=7c2f0e1a-9b3d-4f8e-a1c2-3d4e5f6a7b8c&amp;etti=24&amp;acct=cd3c8e5a-ac4a-4f5b-9b2e-1a2b3c4d5e6f&amp;er=2ad4a3c6" style="background:#ffc820;padding:12px 24px;color:#000;text-decoration:none">REVIEW DOCUMENT</a>
+<p><b>Priya Raman</b><br>Hartwell Wealth Partners<br><a href="mailto:priya.raman@hartwell-wealth.com">priya.raman@hartwell-wealth.com</a></p>
+<p>Please review the updated policy statement before our call on Thursday.</p>
+<p style="font-size:12px;color:#666">Do Not Share This Email. This email contains a secure link to DocuSign. Please do not share this email, link, or access code with others.</p>
+<p style="font-size:12px;color:#666"><a href="https://www.docusign.com/company/privacy-policy">Privacy</a> | <a href="https://support.docusign.com/">Help</a></p>
+</td></tr></table></body></html>
+
+------=_Part_8842_1.1762365595--

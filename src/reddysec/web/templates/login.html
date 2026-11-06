@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf with context %}
+{% block title %}Sign in · Secureddy{% endblock %}
+{% block content %}
+<section class="panel panel-narrow">
+  <a class="brand brand-large" href="/login">Reddy <span>Security</span></a>
+  <p class="lede">A bodyguard for your inbox. Links and files are opened on our servers before they ever reach you.</p>
+
+  {% if error %}
+  <div class="flash flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  {% if google_login_enabled and not needs_code %}
+  <a class="btn btn-primary btn-block" href="/auth/google/start?next={{ next_url | urlencode }}">Sign in with Google</a>
+  <p class="help">We ask Google only for permission to read, label and move mail. We never see your Google password.</p>
+  <div class="divider"><span>or</span></div>
+  {% endif %}
+
+  <form method="post" action="/auth/login" class="stack">
+    {{ csrf() }}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    {% if needs_code %}
+    <p class="help">Open your authenticator app and enter the 6-digit code for <strong>{{ email }}</strong>.</p>
+    <label class="field">
+      <span>Code</span>
+      <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus>
+    </label>
+    <button class="btn btn-primary btn-block" type="submit">Continue</button>
+    {% else %}
+    <label class="field">
+      <span>Email</span>
+      <input class="input" type="email" name="email" value="{{ email }}" autocomplete="username" required>
+    </label>
+    <label class="field">
+      <span>Password</span>
+      <input class="input" type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button class="btn btn-quiet btn-block" type="submit">Sign in with a password</button>
+    {% endif %}
+  </form>
+
+  {% if dev_login_enabled and not needs_code %}
+  <details class="dev-box">
+    <summary>Developer sign-in</summary>
+    <form method="post" action="/auth/dev-login" class="stack">
+      {{ csrf() }}
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <label class="field"><span>Email</span><input class="input" type="email" name="email" required></label>
+      <label class="field"><span>Name</span><input class="input" type="text" name="name" placeholder="Optional"></label>
+      <label class="field"><span>Role</span>
+        <select class="input" name="role">
+          <option value="principal">principal</option>
+          <option value="assistant">assistant</option>
+          <option value="family">family</option>
+          <option value="concierge">concierge</option>
+          <option value="admin">admin</option>
+        </select>
+      </label>
+      <button class="btn btn-quiet btn-block" type="submit">Sign in without a password</button>
+    </form>
+  </details>
+  {% endif %}
+</section>
+{% endblock %}

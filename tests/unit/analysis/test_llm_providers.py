@@ -1,0 +1,166 @@
+"""Claude (Anthropic) and Azure AI Foundry assessors, and the settings factory."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from reddysec.analysis.bec import (
+    AnthropicAssessor,
+    AzureFoundryAssessor,
+    AzureOpenAiAssessor,
+    LlmAssessment,
+    NoopLlm,
+    llm_from_settings,
+)
+from reddysec.config import Settings
+from reddysec.models import ParsedMessage
+
+GOOD = {
+    "is_bec_likely": True,
+    "confidence": 0.9,
+    "intent": "wire fraud via changed bank details",
+    "plain_summary": "The email asks to send money to a new account. Call the sender first.",
+}
+
+
+def message() -> ParsedMessage:
+    return ParsedMessage(
+        provider_message_id="m1",
+        mailbox_id="mbx",
+        received_at=datetime.now(UTC),
+        from_address="attorney@example.com",
+        subject="Updated wiring instructions",
+        text_body="Please use the new account for closing funds.",
+    )
+
+
+def client_with(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+class TestAnthropic:
+    async def test_happy_path_and_request_shape(self):
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            seen["headers"] = dict(request.headers)
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"content": [{"type": "text", "text": json.dumps(GOOD)}]})
+
+        assessor = AnthropicAssessor(client_with(handler), "sk-test", "claude-haiku-4-5")
+        result = await assessor.assess(message(), "reply-to mismatch")
+        assert isinstance(result, LlmAssessment) and result.is_bec_likely and result.confidence == 0.9
+        assert seen["url"] == "https://api.anthropic.com/v1/messages"
+        assert seen["headers"]["x-api-key"] == "sk-test" and seen["headers"]["anthropic-version"] == "2023-06-01"
+        body = seen["body"]
+        assert body["model"] == "claude-haiku-4-5" and body["max_tokens"] == 300 and body["temperature"] == 0
+        assert "fraud analyst" in body["system"]
+        assert body["messages"][0]["role"] == "user"
+        assert "Updated wiring instructions" in body["messages"][0]["content"]
+        assert "reply-to mismatch" in body["messages"][0]["content"]
+
+    async def test_code_fence_is_tolerated(self):
+        fenced = "```json\n" + json.dumps(GOOD) + "\n```"
+
+        def handler(request):
+            return httpx.Response(200, json={"content": [{"type": "text", "text": fenced}]})
+
+        result = await AnthropicAssessor(client_with(handler), "k", "m").assess(message(), "")
+        assert result is not None and result.intent.startswith("wire fraud")
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            httpx.Response(429, json={"error": "rate"}),
+            httpx.Response(200, json={"content": [{"type": "text", "text": "not json"}]}),
+            httpx.Response(200, json={"content": [{"type": "text", "text": json.dumps({"is_bec_likely": "maybe"})}]}),
+            httpx.Response(200, json={"unexpected": 1}),
+            httpx.Response(200, content=b"\xff"),
+        ],
+    )
+    async def test_bad_responses_return_none(self, response):
+        def handler(request):
+            return response
+
+        assert await AnthropicAssessor(client_with(handler), "k", "m").assess(message(), "") is None
+
+    async def test_network_error_and_unconfigured(self):
+        def handler(request):
+            raise httpx.ConnectError("down")
+
+        assert await AnthropicAssessor(client_with(handler), "k", "m").assess(message(), "") is None
+        assert await AnthropicAssessor(client_with(handler), "", "m").assess(message(), "") is None
+
+    async def test_unexpected_exception_is_contained(self):
+        class Boom(httpx.AsyncClient):
+            async def post(self, *a, **k):
+                raise RuntimeError("weird")
+
+        assert await AnthropicAssessor(Boom(), "k", "m").assess(message(), "") is None
+
+
+class TestFoundry:
+    async def test_url_and_model_in_body(self):
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            seen["body"] = json.loads(request.content)
+            seen["key"] = request.headers.get("api-key")
+            return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(GOOD)}}]})
+
+        assessor = AzureFoundryAssessor(
+            client_with(handler), "https://res.services.ai.azure.com", "fk", "Phi-4"
+        )
+        result = await assessor.assess(message(), "")
+        assert result is not None and result.is_bec_likely
+        assert seen["url"] == "https://res.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+        assert seen["body"]["model"] == "Phi-4" and seen["body"]["response_format"] == {"type": "json_object"}
+        assert seen["key"] == "fk"
+
+    def test_azure_openai_has_no_extra_payload(self):
+        plain = AzureOpenAiAssessor(httpx.AsyncClient(), "https://x", "k", "dep")
+        assert plain.extra_payload() == {}
+        assert "/openai/deployments/dep/chat/completions" in plain.url
+
+
+class TestFactory:
+    def test_none_and_unknown(self):
+        assert isinstance(llm_from_settings(Settings(llm_provider="none")), NoopLlm)
+
+        class Odd:
+            llm_provider = "something-else"
+
+        assert isinstance(llm_from_settings(Odd()), NoopLlm)
+
+    def test_each_provider(self):
+        http = httpx.AsyncClient()
+        a = llm_from_settings(Settings(llm_provider="anthropic", anthropic_api_key="k", anthropic_model="m"), http)
+        assert isinstance(a, AnthropicAssessor) and a.url.endswith("/v1/messages")
+        f = llm_from_settings(
+            Settings(
+                llm_provider="azure_foundry",
+                azure_foundry_endpoint="https://r.services.ai.azure.com",
+                azure_foundry_api_key="k",
+                azure_foundry_model="Phi-4",
+            ),
+            http,
+        )
+        assert isinstance(f, AzureFoundryAssessor)
+        o = llm_from_settings(
+            Settings(
+                llm_provider="azure_openai",
+                azure_openai_endpoint="https://o.openai.azure.com",
+                azure_openai_api_key="k",
+                azure_openai_deployment="gpt",
+            ),
+            http,
+        )
+        assert isinstance(o, AzureOpenAiAssessor) and not isinstance(o, AzureFoundryAssessor)
+        default_client = llm_from_settings(Settings(llm_provider="anthropic", anthropic_api_key="k"))
+        assert isinstance(default_client, AnthropicAssessor)

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip, csrf, sender with context %}
+{% block title %}Concierge · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Concierge queue</h1>
+  <p class="lede">Email the engine or a client wants a human to look at. {{ queue | length }} waiting.</p>
+</header>
+
+{% if queue %}
+<section class="stack-lg">
+  {% for item in queue %}
+  <article class="card queue-item">
+    <div class="card-head">
+      <div>
+        <h2><a class="link" href="/messages/{{ item.message.id }}">{{ item.message.subject or "(no subject)" }}</a></h2>
+        <p class="muted">From {{ sender(item.message) }} · {{ item.mailbox.address }} ({{ item.owner.display_name }}) ·
+          <time datetime="{{ item.message.received_at.isoformat() }}">{{ item.message.received_at | ago }}</time></p>
+      </div>
+      {{ chip(item.chip) }}
+    </div>
+    {% if item.summary %}<p>{{ item.summary }}</p>{% endif %}
+    {% if item.request_note %}<p class="note">Client's note: {{ item.request_note }}</p>{% endif %}
+    <div class="actions actions-wrap">
+      <form method="post" action="/concierge/{{ item.message.id }}/reviewed" class="inline-form">
+        {{ csrf() }}
+        <input class="input" type="text" name="note" placeholder="Note for the client (optional)" maxlength="500">
+        <button class="btn btn-quiet" type="submit">Mark reviewed</button>
+      </form>
+      <form method="post" action="/concierge/{{ item.message.id }}/override" class="inline-form" data-confirm="Change the verdict? The client will be notified.">
+        {{ csrf() }}
+        <select class="input" name="level" aria-label="New verdict">
+          {% for code, label in levels %}
+          <option value="{{ code }}"{% if item.message.level == code %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <input class="input" type="text" name="note" placeholder="Why (shown to the client)" maxlength="500">
+        <button class="btn btn-primary" type="submit">Override verdict</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty">
+  <h2>The queue is empty</h2>
+  <p class="muted">Nothing is waiting for review.</p>
+</section>
+{% endif %}
+{% endblock %}

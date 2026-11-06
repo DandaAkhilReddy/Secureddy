@@ -1,0 +1,40 @@
+Delivered-To: client@gmail.com
+Received: from mail.docusign-secure.com (unknown [185.244.25.172]) by mx.google.com with ESMTPS id z3si; Wed, 5 Nov 2026 03:17:44 -0800 (PST)
+Return-Path: <bounce@docusign-secure.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@docusign-secure.com header.s=default header.b=pQ7rSt;
+       spf=pass (google.com: domain of bounce@docusign-secure.com designates 185.244.25.172 as permitted sender) smtp.mailfrom=bounce@docusign-secure.com;
+       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=docusign-secure.com
+From: DocuSign <dse@docusign-secure.com>
+To: client@gmail.com
+Subject: Action Required: Completed Document - Settlement Agreement #44821
+Date: Wed, 05 Nov 2026 03:17:12 -0800
+Message-ID: <20261105111712.8812.9981@docusign-secure.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1_8812"
+
+--b1_8812
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+You have received a document to review and sign.
+
+Review Document: https://docusign-secure.com/review/8812/44821
+
+This document will expire in 24 hours. Please sign immediately to avoid cancellation.
+
+DocuSign, Inc. 221 Main Street, San Francisco, CA 94105
+
+--b1_8812
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body style="font-family:Arial">
+<div style="background:#1f2a44;padding:16px"><img src="https://docusign-secure.com/static/logo.png" alt="DocuSign"></div>
+<h2>You have received a document to review and sign.</h2>
+<p><a href="https://docusign-secure.com/review/8812/44821" style="background:#ffc820;padding:12px 24px;color:#000">REVIEW DOCUMENT</a></p>
+<p>This document will expire in 24 hours. Please sign immediately to avoid cancellation.</p>
+<p style="font-size:11px;color:#777">DocuSign, Inc. 221 Main Street, San Francisco, CA 94105</p>
+</body></html>
+
+--b1_8812--

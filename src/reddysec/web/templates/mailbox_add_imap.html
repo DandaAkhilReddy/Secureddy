@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf with context %}
+{% block title %}Add a mailbox · Secureddy{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/mailboxes">Mailboxes</a><span>/</span><span>Add a mailbox</span></nav>
+<header class="page-head">
+  <h1>Add a mailbox</h1>
+  <p class="lede">Yahoo, iCloud and Outlook.com give out an <strong>app password</strong>: a separate password just for us. Your real password stays with you, and you can revoke ours at any time from your provider.</p>
+</header>
+
+{% if error %}
+<div class="flash flash-error" role="alert">{{ error }}</div>
+{% endif %}
+
+<div class="two-col">
+  <form method="post" action="/mailboxes/add-imap" class="card stack" id="imap-form">
+    {{ csrf() }}
+    <label class="field">
+      <span>Mail provider</span>
+      <select class="input" name="provider" id="imap-provider">
+        {% for p in providers %}
+        <option value="{{ p.key }}" data-host="{{ p.host }}" data-port="{{ p.port }}"{% if form.get("provider") == p.key %} selected{% endif %}>{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Email address</span>
+      <input class="input" type="email" name="address" value="{{ form.get("address", "") }}" autocomplete="email" required>
+    </label>
+    <label class="field">
+      <span>App password</span>
+      <input class="input" type="password" name="app_password" autocomplete="off" required>
+    </label>
+    <div class="field-group" id="imap-custom"{% if form.get("provider", "yahoo") != "imap" %} hidden{% endif %}>
+      <label class="field">
+        <span>IMAP server</span>
+        <input class="input" type="text" name="host" value="{{ form.get("host", "") }}" placeholder="imap.example.com">
+      </label>
+      <label class="field">
+        <span>Port</span>
+        <input class="input input-short" type="text" name="port" inputmode="numeric" value="{{ form.get("port", "993") }}">
+      </label>
+    </div>
+    <button class="btn btn-primary" type="submit">Connect mailbox</button>
+    <p class="help">We check the connection within a minute and show the result on the Mailboxes page.</p>
+  </form>
+
+  <aside class="card">
+    <h2>How to get an app password</h2>
+    {% for p in providers %}
+    <details class="provider-steps" data-provider="{{ p.key }}"{% if form.get("provider", "yahoo") == p.key %} open{% endif %}>
+      <summary>{{ p.label }}</summary>
+      <ol class="steps steps-compact">
+        {% for step in p.steps %}<li>{{ step }}</li>{% endfor %}
+      </ol>
+    </details>
+    {% endfor %}
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,29 @@
+{# Small reusable pieces. Keep them dumb: all wording comes from presenters. #}
+
+{% macro chip(c) -%}
+<span class="chip tone-{{ c.tone }}">{{ c.label }}</span>
+{%- endmacro %}
+
+{% macro csrf() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{%- endmacro %}
+
+{% macro signals(items) -%}
+{% if items %}
+<ul class="signals">
+  {% for s in items %}
+  <li class="signal{% if s.trust %} signal-trust{% endif %}">
+    <div class="signal-head">
+      <span class="signal-title">{{ s.title }}</span>
+      <span class="bar" aria-hidden="true"><span class="bar-fill {{ s.bar }}"></span></span>
+    </div>
+    {% if s.detail %}<p class="signal-detail">{{ s.detail }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{%- endmacro %}
+
+{% macro sender(message) -%}
+{% if message.from_name %}<strong>{{ message.from_name }}</strong> <span class="muted">{{ message.from_address }}</span>{% else %}<strong>{{ message.from_address or "Unknown sender" }}</strong>{% endif %}
+{%- endmacro %}

@@ -1,0 +1,143 @@
+# Local full stack. Run from the repository root:
+#
+#   cp .env.example .env            # fill RS_GOOGLE_CLIENT_ID / SECRET if you have them
+#   make compose-up                 # or: docker compose -f docker/docker-compose.yml up --build
+#   open http://localhost:8000
+#
+# Services:
+#   postgres   PostgreSQL 16 (dev credentials, loopback only)
+#   init-db    one-shot `reddysec init-db`, then exits
+#   web        FastAPI + Reading Room (Chromium inside the web container)
+#   worker     polling, analysis, detonations (local backend inside the container)
+#   deadman    dead man's switch
+#   chamber    build-only target for the detonation image (profile "build")
+#
+# Networks: the default network carries app <-> postgres traffic. "rs-detonation"
+# is a separate bridge with inter-container traffic disabled, the network the
+# docker backend attaches chamber containers to. The docker backend drives the
+# `docker` CLI, which the app image does not ship, so inside compose the worker
+# uses the local backend. To exercise the docker backend, run the worker on the
+# host instead:
+#
+#   RS_SANDBOX_BACKEND=docker RS_CHAMBER_IMAGE=reddysec-chamber:local \
+#   RS_CHAMBER_NETWORK=rs-detonation reddysec worker
+
+name: reddysec
+
+x-app-image: &app-image
+  image: reddysec-app:local
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.app
+
+x-app-env: &app-env
+  RS_ENV: dev
+  RS_DATABASE_URL: postgresql+asyncpg://reddysec:reddysec@postgres:5432/reddysec
+  RS_ARTIFACTS_DIR: /var/lib/reddysec/artifacts
+  RS_LOG_LEVEL: ${RS_LOG_LEVEL:-INFO}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reddysec
+      POSTGRES_PASSWORD: reddysec
+      POSTGRES_DB: reddysec
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reddysec -d reddysec"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  init-db:
+    <<: *app-image
+    command: ["reddysec", "init-db"]
+    env_file: ../.env
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *app-image
+    command: ["reddysec", "web"]
+    env_file: ../.env
+    environment:
+      <<: *app-env
+      RS_BASE_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - artifacts:/var/lib/reddysec/artifacts
+    # Chromium for the Reading Room needs a real /dev/shm.
+    shm_size: 512m
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    <<: *app-image
+    command: ["reddysec", "worker"]
+    env_file: ../.env
+    environment:
+      <<: *app-env
+      RS_SANDBOX_BACKEND: local
+    volumes:
+      - artifacts:/var/lib/reddysec/artifacts
+    shm_size: 512m
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  deadman:
+    <<: *app-image
+    command: ["reddysec", "deadman"]
+    env_file: ../.env
+    environment: *app-env
+    volumes:
+      - artifacts:/var/lib/reddysec/artifacts
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Build target only. `docker compose --profile build build chamber` produces
+  # the image the docker backend launches per detonation. Never long-running.
+  chamber:
+    image: reddysec-chamber:local
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.chamber
+    profiles: ["build"]
+    networks:
+      - detonation
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+      - /work:size=256m
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:../src/reddysec/chamber/seccomp-chamber.json
+    command: ["--stdio"]
+
+networks:
+  default: {}
+  detonation:
+    name: rs-detonation
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+
+volumes:
+  pgdata: {}
+  artifacts: {}

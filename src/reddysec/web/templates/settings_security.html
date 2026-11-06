@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf with context %}
+{% block title %}Settings · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Sign-in settings</h1>
+  <p class="lede">How you prove it is you. These settings matter only for signing in with a password; Google sign-in is protected by Google.</p>
+</header>
+
+<section class="card">
+  <div class="card-head">
+    <h2>2-step sign-in</h2>
+    <span class="chip tone-{{ 'ok' if totp_enabled else 'grey' }}">{{ "On" if totp_enabled else "Off" }}</span>
+  </div>
+  {% if totp_enabled %}
+  <p>Each password sign-in also asks for a 6-digit code from your authenticator app.</p>
+  <form method="post" action="/settings/security/totp/disable" class="inline-form" data-confirm="Turn off 2-step sign-in? Your account becomes easier to break into.">
+    {{ csrf() }}
+    <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Current code" maxlength="7" required>
+    <button class="btn btn-danger" type="submit">Turn off</button>
+  </form>
+  {% else %}
+  <p>Add a second lock. Open an authenticator app (Google Authenticator, 1Password, Authy or similar), add an account by typing this key, then enter the code it shows.</p>
+  <div class="key-box">
+    <span class="muted small">Key</span>
+    <code class="manual-key">{{ manual_key }}</code>
+    <span class="muted small">Or paste this link into your app</span>
+    <code class="otpauth">{{ otpauth_uri }}</code>
+  </div>
+  <form method="post" action="/settings/security/totp/enable" class="inline-form">
+    {{ csrf() }}
+    <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" maxlength="7" required>
+    <button class="btn btn-primary" type="submit">Turn on 2-step sign-in</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Password</h2>
+    <span class="chip tone-{{ 'ok' if has_password else 'grey' }}">{{ "Set" if has_password else "Not set" }}</span>
+  </div>
+  <p>A password lets you sign in without Google, for example from a Yahoo-only account. Use at least {{ password_min_length }} characters; a short sentence works well.</p>
+  <form method="post" action="/settings/security/password" class="stack">
+    {{ csrf() }}
+    <label class="field"><span>New password</span><input class="input" type="password" name="password" autocomplete="new-password" minlength="{{ password_min_length }}" required></label>
+    <label class="field"><span>Repeat it</span><input class="input" type="password" name="confirm" autocomplete="new-password" minlength="{{ password_min_length }}" required></label>
+    <button class="btn btn-quiet" type="submit">{{ "Change password" if has_password else "Set password" }}</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,53 @@
+Return-Path: <jonas.berg@icloud.com>
+Received: from p00-icloudmta-asmtp-us-west-2b-70-8bf9bb79d4-tc4jk.p00-icloudmta-asmtp-us-west-2b-70-8bf9bb79d4.p00-icloudmta-asmtp-us-west-2b-70 ([17.57.155.11]) by ms-asmtp-mr-002.p00-icloudmta-asmtp.icloud.com; Wed, 05 Nov 2026 15:30:12 +0000 (UTC)
+Authentication-Results: p00-icloudmta-asmtp-us-west-2b-70-8bf9bb79d4-tc4jk.p00-icloudmta-asmtp-us-west-2b-70-8bf9bb79d4.p00-icloudmta-asmtp-us-west-2b-70;
+	dkim=pass (2048-bit key) header.d=icloud.com header.i=@icloud.com header.b=Xy1zAb2c;
+	spf=pass smtp.mailfrom=icloud.com;
+	dmarc=pass header.from=icloud.com
+From: Jonas Berg <jonas.berg@icloud.com>
+To: client@icloud.com
+Subject: Invitation: Board prep call @ Thu Nov 6, 2026 4pm - 4:45pm (PST)
+Date: Wed, 05 Nov 2026 15:30:05 +0000
+Message-ID: <F1E2D3C4-B5A6-4978-8A9B-0C1D2E3F4A5B@icloud.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="Apple-Mail=_7A8B9C0D"
+
+--Apple-Mail=_7A8B9C0D
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Jonas Berg has invited you to "Board prep call".
+
+When: Thursday, November 6, 2026 4:00 PM - 4:45 PM (PST)
+Where: https://zoom.us/j/98765432100?pwd=QmFzZTY0UGFzc3dvcmQxMjM
+
+--Apple-Mail=_7A8B9C0D
+Content-Type: text/calendar; charset="utf-8"; method=REQUEST
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Apple Inc.//macOS 16.1//EN
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:F1E2D3C4-B5A6-4978-8A9B-0C1D2E3F4A5B
+DTSTAMP:20261105T153005Z
+DTSTART;TZID=America/Los_Angeles:20261106T160000
+DTEND;TZID=America/Los_Angeles:20261106T164500
+SUMMARY:Board prep call
+LOCATION:https://zoom.us/j/98765432100?pwd=QmFzZTY0UGFzc3dvcmQxMjM
+ORGANIZER;CN=Jonas Berg:mailto:jonas.berg@icloud.com
+ATTENDEE;CN=client@icloud.com;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:client@icloud.com
+END:VEVENT
+END:VCALENDAR
+
+--Apple-Mail=_7A8B9C0D
+Content-Type: application/ics; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+Content-Transfer-Encoding: base64
+
+QkVHSU46VkNBTEVOREFSClZFUlNJT046Mi4wClBST0RJRDotLy9BcHBsZSBJbmMuLy9tYWNPUyAx
+Ni4xLy9FTgpNRVRIT0Q6UkVRVUVTVApCRUdJTjpWRVZFTlQKVUlEOkYxRTJEM0M0LUI1QTYtNDk3
+OC04QTlCLTBDMUQyRTNGNEE1QgpTVU1NQVJZOkJvYXJkIHByZXAgY2FsbApFTkQ6VkVWRU5UCkVO
+RDpWQ0FMRU5EQVIK
+--Apple-Mail=_7A8B9C0D--

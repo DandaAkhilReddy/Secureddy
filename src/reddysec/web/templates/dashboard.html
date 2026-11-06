@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip, sender with context %}
+{% block title %}Home · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Welcome back, {{ first_name }}.</h1>
+  <p class="lede">{{ sentence }}</p>
+</header>
+
+{% if show_empty_state %}
+<section class="card empty">
+  <h2>Three steps and you are protected</h2>
+  <ol class="steps">
+    <li>
+      <strong>Connect your mailbox.</strong>
+      <span>Gmail takes one click. Yahoo, iCloud and Outlook.com use an app password.</span>
+    </li>
+    <li>
+      <strong>Choose Scan or Hold.</strong>
+      <span>Scan labels email as it arrives. Hold keeps new email out of your inbox until we have checked it.</span>
+    </li>
+    <li>
+      <strong>We start within a minute.</strong>
+      <span>Every link and file is opened on our servers first. You read the verdict here, in plain words.</span>
+    </li>
+  </ol>
+  <div class="actions">
+    {% if google_login_enabled %}
+    <a class="btn btn-primary" href="/auth/google/start?next=/mailboxes">Connect Gmail</a>
+    {% endif %}
+    <a class="btn btn-quiet" href="/mailboxes/add-imap">Add Yahoo, iCloud or Outlook.com</a>
+  </div>
+</section>
+{% else %}
+<section class="stats" aria-label="This week">
+  <div class="stat"><span class="stat-value">{{ counts.checked }}</span><span class="stat-label">Checked this week</span></div>
+  <div class="stat stat-warn"><span class="stat-value">{{ counts.suspicious }}</span><span class="stat-label">Suspicious</span></div>
+  <div class="stat stat-bad"><span class="stat-value">{{ counts.quarantined }}</span><span class="stat-label">In Quarantine</span></div>
+</section>
+{% endif %}
+
+{% if mailboxes %}
+<section class="card">
+  <div class="card-head">
+    <h2>Your mailboxes</h2>
+    <a class="link" href="/mailboxes">Manage</a>
+  </div>
+  <ul class="mailbox-list">
+    {% for m in mailboxes %}
+    <li class="mailbox-row">
+      <div>
+        <strong>{{ m.row.address }}</strong>
+        <span class="muted">{{ m.row.provider | provider }}</span>
+      </div>
+      <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if notifications %}
+<section class="card">
+  <div class="card-head">
+    <h2>Needs your attention</h2>
+    <a class="link" href="/notifications">All notices</a>
+  </div>
+  <ul class="notice-list">
+    {% for n in notifications %}
+    <li>
+      <div class="notice-title">{{ n.title }}</div>
+      <p class="muted">{{ n.body }}</p>
+      <div class="meta">
+        <time datetime="{{ n.created_at.isoformat() }}" title="{{ n.created_at | dt }}">{{ n.created_at | ago }}</time>
+        {% if n.message_id %}<a class="link" href="/messages/{{ n.message_id }}">Open the report</a>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if recent %}
+<section class="card">
+  <div class="card-head">
+    <h2>Recent email</h2>
+    <a class="link" href="/messages">See all</a>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>When</th><th>From</th><th>Subject</th><th>Verdict</th><th class="col-hide-sm">Lane</th><th><span class="sr-only">Report</span></th></tr>
+      </thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td><time datetime="{{ r.message.received_at.isoformat() }}" title="{{ r.message.received_at | dt }}">{{ r.message.received_at | ago }}</time></td>
+          <td>{{ sender(r.message) }}</td>
+          <td class="col-subject">{{ r.message.subject or "(no subject)" }}</td>
+          <td>{{ chip(r.chip) }}</td>
+          <td class="col-hide-sm muted">{{ r.message.lane | lane }}</td>
+          <td><a class="link" href="/messages/{{ r.message.id }}">Report</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% elif not show_empty_state %}
+<section class="card empty">
+  <h2>No email checked yet</h2>
+  <p class="muted">Your mailbox is connected. The first verdicts appear here within a minute of new email arriving.</p>
+</section>
+{% endif %}
+{% endblock %}

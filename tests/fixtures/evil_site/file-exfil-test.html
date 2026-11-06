@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shared document</title>
+</head>
+<body>
+  <h1>Shared document</h1>
+  <p>Opening this attachment should never let it reach the network.</p>
+  <img src="{{ORIGIN}}/beacon.png" alt="tracking pixel" width="1" height="1">
+  <script>
+    try { fetch("{{ORIGIN}}/beacon?via=fetch", {mode: "no-cors"}); } catch (e) {}
+    try { var x = new XMLHttpRequest(); x.open("GET", "{{ORIGIN}}/beacon?via=xhr"); x.send(); } catch (e) {}
+    try { navigator.sendBeacon && navigator.sendBeacon("{{ORIGIN}}/beacon?via=sendbeacon", "x"); } catch (e) {}
+  </script>
+</body>
+</html>

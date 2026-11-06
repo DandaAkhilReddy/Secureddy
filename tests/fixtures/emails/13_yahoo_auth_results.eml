@@ -1,0 +1,29 @@
+Return-Path: <statements@alerts.hartwell-wealth.com>
+Received: from sonic.gate.mail.ne1.yahoo.com by sonic303.consmr.mail.ne1.yahoo.com with HTTP; Wed, 5 Nov 2026 19:02:41 +0000
+Received: from mta-12.alerts.hartwell-wealth.com (mta-12.alerts.hartwell-wealth.com [64.233.160.12]) by sonic304-21.consmr.mail.ne1.yahoo.com with ESMTPS id 8f1e2d3c; Wed, 5 Nov 2026 19:02:40 +0000
+X-Originating-Ip: [64.233.160.12]
+Received-SPF: pass (domain of alerts.hartwell-wealth.com designates 64.233.160.12 as permitted sender)
+Authentication-Results: atlas304.free.mail.ne1.yahoo.com;
+ dkim=pass header.i=@hartwell-wealth.com header.s=mail2026;
+ spf=pass smtp.mailfrom=alerts.hartwell-wealth.com;
+ dmarc=pass(p=REJECT) header.from=hartwell-wealth.com;
+X-Apparently-To: client@yahoo.com; Wed, 5 Nov 2026 19:02:41 +0000
+From: Hartwell Wealth Partners <statements@alerts.hartwell-wealth.com>
+To: client@yahoo.com
+Subject: Your October statement is ready
+Date: Wed, 05 Nov 2026 19:02:30 +0000
+Message-ID: <20261105190230.3f1a2b@alerts.hartwell-wealth.com>
+List-Unsubscribe: <https://alerts.hartwell-wealth.com/preferences/unsubscribe?c=9a8b7c6d>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Your October 2026 statement is now available in the client portal.
+
+Sign in at https://portal.hartwell-wealth.com/ with your usual credentials to
+view it. For your security we never include statements as attachments.
+
+Questions? Call your advisor, Priya Raman, at the number on your welcome letter.
+
+Hartwell Wealth Partners
+To stop these notices: https://alerts.hartwell-wealth.com/preferences/unsubscribe?c=9a8b7c6d

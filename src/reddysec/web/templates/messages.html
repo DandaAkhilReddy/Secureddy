@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip, sender with context %}
+{% block title %}All email · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>All email</h1>
+  <p class="lede">Every message we have checked, newest first.</p>
+</header>
+
+<form method="get" action="/messages" class="filters">
+  <label class="field field-inline">
+    <span>Verdict</span>
+    <select class="input" name="level">
+      <option value="">Any</option>
+      {% for code, label in levels %}
+      <option value="{{ code }}"{% if level == code %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% if mailboxes | length > 1 %}
+  <label class="field field-inline">
+    <span>Mailbox</span>
+    <select class="input" name="mailbox">
+      <option value="">All</option>
+      {% for m in mailboxes %}
+      <option value="{{ m.id }}"{% if mailbox == m.id %} selected{% endif %}>{{ m.address }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <label class="check">
+    <input type="checkbox" name="quarantined" value="1"{% if quarantined %} checked{% endif %}>
+    <span>Only Quarantine</span>
+  </label>
+  <button class="btn btn-quiet" type="submit">Filter</button>
+</form>
+
+{% if rows %}
+<div class="card table-wrap">
+  <table class="table">
+    <thead>
+      <tr><th>When</th><th>From</th><th>Subject</th><th>Verdict</th><th><span class="sr-only">Report</span></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><time datetime="{{ r.message.received_at.isoformat() }}" title="{{ r.message.received_at | dt }}">{{ r.message.received_at | ago }}</time></td>
+        <td>{{ sender(r.message) }}</td>
+        <td class="col-subject">{{ r.message.subject or "(no subject)" }}{% if r.summary %}<span class="muted small block">{{ r.summary }}</span>{% endif %}</td>
+        <td>{{ chip(r.chip) }}</td>
+        <td><a class="link" href="/messages/{{ r.message.id }}">Report</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<section class="card empty">
+  <h2>Nothing to show</h2>
+  <p class="muted">No email matches these filters yet.</p>
+</section>
+{% endif %}
+{% endblock %}

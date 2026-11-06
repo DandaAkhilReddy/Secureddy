@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}Secureddy{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+{% if user %}
+<div class="shell">
+  <aside class="nav" aria-label="Main navigation">
+    <a class="brand" href="/">Reddy <span>Security</span></a>
+    <nav>
+      <ul>
+        {% for href, label in nav_items %}
+        <li>
+          <a href="{{ href }}"{% if current_path == href or (href != '/' and current_path.startswith(href)) %} aria-current="page"{% endif %}>{{ label }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+    </nav>
+    <div class="nav-foot">
+      <div class="nav-user">
+        <strong>{{ user.display_name }}</strong>
+        <span>{{ user.login_email }}</span>
+      </div>
+      <form method="post" action="/auth/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn btn-quiet btn-small" type="submit">Sign out</button>
+      </form>
+    </div>
+  </aside>
+{% endif %}
+  <main id="main" class="content{% if not user %} content-centered{% endif %}">
+    {% if flashes %}
+    <div class="flashes" aria-live="polite">
+      {% for f in flashes %}
+      <div class="flash flash-{{ f.kind }}" data-flash>
+        <span>{{ f.text }}</span>
+        <button type="button" class="flash-close" data-flash-close aria-label="Dismiss">&times;</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+{% if user %}
+</div>
+{% endif %}
+<script src="/static/app.js" defer></script>
+</body>
+</html>

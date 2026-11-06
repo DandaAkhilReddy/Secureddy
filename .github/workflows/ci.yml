@@ -1,0 +1,164 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  PIP_CONSTRAINT: ${{ github.workspace }}/.github/constraints.txt
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Tests never reach the network or a real browser unless marked integration.
+  RS_ENV: test
+  RS_INTEL_ONLINE: "false"
+  RS_SANDBOX_BACKEND: local
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install "ruff>=0.5"
+      - name: ruff check
+        run: ruff check --output-format=github src tests
+      - name: ruff format --check
+        run: ruff format --check src tests
+
+  test:
+    name: unit + functional (coverage >= 85%)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e ".[dev,azure]"
+      - name: pytest
+        run: >
+          pytest -m "not integration"
+          --cov=reddysec --cov-branch
+          --cov-report=xml:coverage.xml --cov-report=html:htmlcov --cov-report=term-missing
+          --cov-fail-under=85
+          --junitxml=junit.xml
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.xml
+            htmlcov/
+            junit.xml
+          retention-days: 14
+
+  integration:
+    name: integration (real Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e ".[dev,azure]"
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: pytest -m integration
+        run: pytest -m integration --junitxml=junit-integration.xml
+        env:
+          RS_SANDBOX_BACKEND: local
+          RS_INTEL_ONLINE: "false"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-results
+          path: junit-integration.xml
+          retention-days: 14
+
+  bicep:
+    name: bicep build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bicep CLI
+        run: |
+          curl -fsSL -o /usr/local/bin/bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x /usr/local/bin/bicep
+          bicep --version
+      - name: Build every template (warnings fail the build)
+        run: |
+          set -euo pipefail
+          status=0
+          for f in infra/azure/main.bicep infra/azure/modules/*.bicep; do
+            out="$(bicep build "$f" --stdout 2>&1 >/dev/null || true)"
+            if [[ -n "$out" ]]; then echo "::error file=$f::$out"; status=1; else echo "ok  $f"; fi
+          done
+          for p in infra/azure/*.bicepparam; do
+            out="$(bicep build-params "$p" --stdout 2>&1 >/dev/null || true)"
+            if [[ -n "$out" ]]; then echo "::error file=$p::$out"; status=1; else echo "ok  $p"; fi
+          done
+          exit $status
+      - name: Shell scripts parse
+        run: bash -n infra/azure/bootstrap.sh && bash -n infra/azure/deploy-apps.sh
+
+  docker:
+    name: hadolint + compose config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/Dockerfile.app
+          failure-threshold: warning
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/Dockerfile.chamber
+          failure-threshold: warning
+      - name: docker compose config
+        run: |
+          cp .env.example .env
+          docker compose -f docker/docker-compose.yml --profile build config -q
+
+  audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project + pip-audit
+        run: |
+          python -m pip install ".[dev,azure]" "asyncpg==0.30.0"
+          python -m pip install pip-audit
+      - name: Audit the resolved environment
+        # --strict also fails on packages the vulnerability service cannot look up.
+        run: pip-audit --strict --desc on --progress-spinner off

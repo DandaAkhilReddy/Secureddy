@@ -1,0 +1,4 @@
+# pip constraints shared by CI and the container images.
+# Playwright's pip package must match the browsers baked into
+# mcr.microsoft.com/playwright/python:v1.63.0-noble (docker/Dockerfile.*).
+playwright==1.63.0

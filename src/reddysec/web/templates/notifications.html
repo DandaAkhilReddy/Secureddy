@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip with context %}
+{% block title %}Notices · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Notices</h1>
+  <p class="lede">Everything we have told you, newest first.</p>
+</header>
+
+{% if notifications %}
+<section class="card">
+  <ul class="notice-list">
+    {% for n in notifications %}
+    <li>
+      <div class="notice-head">
+        {{ chip(n.chip) }}
+        <span class="notice-title">{{ n.row.title }}</span>
+      </div>
+      <p class="muted">{{ n.row.body }}</p>
+      <div class="meta">
+        <time datetime="{{ n.row.created_at.isoformat() }}" title="{{ n.row.created_at | dt }}">{{ n.row.created_at | ago }}</time>
+        <span class="muted">{{ "Sent by " ~ n.row.channel if n.row.sent_at else "Shown here" }}</span>
+        {% if n.row.message_id %}<a class="link" href="/messages/{{ n.row.message_id }}">Open the report</a>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% else %}
+<section class="card empty">
+  <h2>No notices</h2>
+  <p class="muted">When something needs your attention, it appears here and on the home page.</p>
+</section>
+{% endif %}
+{% endblock %}

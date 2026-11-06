@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip, csrf, signals, sender with context %}
+{% block title %}{{ message.subject or "Email report" }} · Secureddy{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><span>Email report</span></nav>
+
+<header class="page-head report-head">
+  <div class="report-title">
+    <h1>{{ message.subject or "(no subject)" }}</h1>
+    <p class="muted">From {{ sender(message) }} · to {{ mailbox.address }} ·
+      <time datetime="{{ message.received_at.isoformat() }}">{{ message.received_at | dt }}</time></p>
+  </div>
+  <div class="verdict-block">
+    {{ chip(report.chip) }}
+  </div>
+</header>
+
+<section class="card summary-card">
+  <p class="summary">{{ report.summary }}</p>
+  {% if report.note %}<p class="note">{{ report.note }}</p>{% endif %}
+  {% if report.override_note %}<p class="note">Analyst's note: {{ report.override_note }}</p>{% endif %}
+  {% if report.lane %}<p class="muted small">{{ report.lane }}.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>What you can do</h2>
+  <div class="actions actions-wrap">
+    {% if report.can_release %}
+    <form method="post" action="/messages/{{ message.id }}/release" data-confirm="This email was judged dangerous. Release it to your inbox anyway?">
+      {{ csrf() }}
+      <button class="btn btn-danger" type="submit">Release to my inbox</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/messages/{{ message.id }}/review" class="inline-form">
+      {{ csrf() }}
+      <input class="input" type="text" name="note" placeholder="Anything we should know? (optional)" maxlength="500">
+      <button class="btn btn-quiet" type="submit">Ask the concierge to review</button>
+    </form>
+  </div>
+  <div class="feedback">
+    <span class="muted">Was our verdict right?</span>
+    <form method="post" action="/messages/{{ message.id }}/feedback">
+      {{ csrf() }}
+      <input type="hidden" name="verdict" value="fine">
+      <button class="btn btn-ghost btn-small" type="submit">This is fine</button>
+    </form>
+    <form method="post" action="/messages/{{ message.id }}/feedback">
+      {{ csrf() }}
+      <input type="hidden" name="verdict" value="bad">
+      <button class="btn btn-ghost btn-small" type="submit">This is bad</button>
+    </form>
+  </div>
+</section>
+
+{% if report.signals %}
+<section class="card">
+  <h2>What we found</h2>
+  {{ signals(report.signals) }}
+</section>
+{% endif %}
+
+{% if report.urls %}
+<section class="card">
+  <h2>Links in this email</h2>
+  <p class="help">Links are shown as text on purpose. Open them only through the Reading Room, which runs the page on our servers and shows you a live picture of it.</p>
+  <ul class="url-list">
+    {% for u in report.urls %}
+    <li class="url-item">
+      <div class="url-head">
+        {{ chip(u.chip) }}
+        <code class="url-text">{{ u.url }}</code>
+      </div>
+      {% if u.final_url %}<p class="muted small">Ends up at <code class="url-text">{{ u.final_url }}</code></p>{% endif %}
+      {% if u.screenshot_url %}
+      <figure class="screenshot">
+        <img src="{{ u.screenshot_url }}" alt="What the page looked like when we opened it in our sandbox" loading="lazy">
+        <figcaption class="muted small">What we saw when we opened it in the sandbox.</figcaption>
+      </figure>
+      {% elif u.detonated %}
+      <p class="muted small">Opened in our sandbox; no picture was kept.</p>
+      {% endif %}
+      {{ signals(u.signals) }}
+      {% if room_enabled %}
+      <form method="post" action="/room/start" class="room-form">
+        {{ csrf() }}
+        <input type="hidden" name="url" value="{{ u.url }}">
+        <input type="hidden" name="message_id" value="{{ message.id }}">
+        <button class="btn btn-primary" type="submit">Open in Reading Room</button>
+      </form>
+      {% else %}
+      <button class="btn btn-quiet" type="button" disabled aria-disabled="true" title="The Reading Room is not switched on for this server">Reading Room unavailable</button>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if report.attachments %}
+<section class="card">
+  <h2>Files attached</h2>
+  <ul class="attachment-list">
+    {% for a in report.attachments %}
+    <li class="attachment-item">
+      <div class="url-head">
+        {{ chip(a.chip) }}
+        <span class="filename">{{ a.filename }}</span>
+        {% if a.safe_copy_url %}
+        <a class="btn btn-quiet btn-small" href="{{ a.safe_copy_url }}">Get safe copy</a>
+        {% endif %}
+      </div>
+      {% if a.safe_copy_url %}<p class="muted small">The safe copy is a flattened version with anything active removed.</p>{% endif %}
+      {{ signals(a.signals) }}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card details">
+  <h2>Details</h2>
+  <dl class="dl">
+    <dt>Report id</dt><dd><code>{{ message.id }}</code></dd>
+    {% if report.score is not none %}<dt>Risk score</dt><dd>{{ report.score }} out of 100</dd>{% endif %}
+    {% if report.analyzed_at %}<dt>Checked</dt><dd>{{ report.analyzed_at | dt }}</dd>{% endif %}
+    <dt>Links</dt><dd>{{ message.url_count }}</dd>
+    <dt>Files</dt><dd>{{ message.attachment_count }}</dd>
+    {% if report.engine_version %}<dt>Engine</dt><dd>{{ report.engine_version }}</dd>{% endif %}
+    {% if is_staff %}<dt>State</dt><dd><code>{{ message.state }}</code></dd>{% endif %}
+  </dl>
+</section>
+{% endblock %}

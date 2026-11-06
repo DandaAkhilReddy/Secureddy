@@ -1,0 +1,203 @@
+# Deploy to Azure.
+#
+#   * push a tag v*            -> full deploy to prod (infra + images)
+#   * Run workflow (dispatch)  -> choose environment; "apps only" skips Bicep
+#
+# Login is OIDC: azure/login exchanges the GitHub token for a managed-identity
+# token. No Azure secret is stored in GitHub. The identity, its federated
+# credentials (subject repo:<owner>/<repo>:environment:<env>) and its roles are
+# created by infra/azure/main.bicep (githubRepository parameter).
+#
+# GitHub configuration (Settings -> Environments), per environment dev/prod:
+#   secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   vars:    AZURE_RESOURCE_GROUP, ACR_NAME, APP_BASE_URL
+#   prod only: "Required reviewers" (you + one more), "Wait timer" 0,
+#              deployment branches: tags matching v* and the main branch.
+# bootstrap.sh prints the values.
+
+name: deploy
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+      apps_only:
+        description: Only roll new images (skip Bicep)
+        type: boolean
+        default: false
+      image_tag:
+        description: Existing image tag to roll (empty = build from this commit)
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'prod' }}
+  cancel-in-progress: false
+
+env:
+  TARGET_ENV: ${{ github.event.inputs.environment || 'prod' }}
+
+jobs:
+  preflight:
+    name: validate templates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: bicep build
+        run: |
+          curl -fsSL -o /usr/local/bin/bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x /usr/local/bin/bicep
+          set -euo pipefail
+          for f in infra/azure/main.bicep infra/azure/modules/*.bicep; do bicep build "$f" --stdout >/dev/null; done
+          bicep build-params "infra/azure/main.${TARGET_ENV}.bicepparam" --stdout >/dev/null
+
+  build:
+    name: build images (${{ github.event.inputs.environment || 'prod' }})
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [[ -n "${{ github.event.inputs.image_tag }}" ]]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: azure/login@v2
+        if: github.event.inputs.image_tag == ''
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: az acr build (app)
+        if: github.event.inputs.image_tag == ''
+        run: >
+          az acr build --registry "${{ vars.ACR_NAME }}" --platform linux/amd64
+          --image "reddysec-app:${{ steps.tag.outputs.tag }}"
+          --image "reddysec-app:${{ env.TARGET_ENV }}-latest"
+          --file docker/Dockerfile.app .
+
+      - name: az acr build (chamber)
+        if: github.event.inputs.image_tag == ''
+        run: >
+          az acr build --registry "${{ vars.ACR_NAME }}" --platform linux/amd64
+          --image "reddysec-chamber:${{ steps.tag.outputs.tag }}"
+          --image "reddysec-chamber:${{ env.TARGET_ENV }}-latest"
+          --file docker/Dockerfile.chamber .
+
+  infra:
+    name: deploy infrastructure + apps
+    needs: build
+    if: github.event.inputs.apps_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Compile parameters
+        run: az bicep build-params --file "infra/azure/main.${TARGET_ENV}.bicepparam" --outfile params.json
+
+      - name: What-if
+        run: >
+          az deployment group what-if
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --template-file infra/azure/main.bicep
+          --parameters @params.json
+          --parameters imageTag="${{ needs.build.outputs.tag }}" deployApps=true
+          --no-pretty-print --result-format ResourceIdOnly
+
+      - name: az deployment group create
+        run: >
+          az deployment group create
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --name "gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          --template-file infra/azure/main.bicep
+          --parameters @params.json
+          --parameters imageTag="${{ needs.build.outputs.tag }}" deployApps=true
+          --output none
+
+      - name: Approve Front Door private link (first deploy only)
+        run: |
+          set -euo pipefail
+          env_id="$(az deployment group show -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+                    --query properties.outputs.containerAppsEnvironmentId.value -o tsv)"
+          [[ -n "$env_id" ]] || exit 0
+          for conn in $(az network private-endpoint-connection list --id "$env_id" \
+              --query "[?properties.privateLinkServiceConnectionState.status=='Pending'].id" -o tsv); do
+            az network private-endpoint-connection approve --id "$conn" --description "Front Door" -o none
+            echo "approved $conn"
+          done
+
+  apps:
+    name: roll images only
+    needs: build
+    if: github.event.inputs.apps_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: az containerapp update (worker, web, deadman)
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+          rg="${{ vars.AZURE_RESOURCE_GROUP }}"
+          acr="$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)"
+          tag="${{ needs.build.outputs.tag }}"
+          prefix="rsec-${TARGET_ENV}"
+          # deadman last: the safety net keeps running while the others restart
+          az containerapp update -g "$rg" -n "$prefix-worker"  --image "$acr/reddysec-app:$tag" \
+             --set-env-vars "RS_CHAMBER_IMAGE=$acr/reddysec-chamber:$tag" -o none
+          az containerapp update -g "$rg" -n "$prefix-web"     --image "$acr/reddysec-app:$tag" -o none
+          az containerapp update -g "$rg" -n "$prefix-deadman" --image "$acr/reddysec-app:$tag" -o none
+
+  smoke:
+    name: smoke test
+    needs: [infra, apps]
+    if: always() && (needs.infra.result == 'success' || needs.apps.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - name: GET /healthz
+        run: |
+          set -euo pipefail
+          url="${{ vars.APP_BASE_URL }}/healthz"
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$url" >/dev/null; then echo "healthy after $i attempt(s)"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::$url not healthy after 300 s"; exit 1
+      - name: GET /readyz
+        run: curl -fsS --max-time 10 "${{ vars.APP_BASE_URL }}/readyz"

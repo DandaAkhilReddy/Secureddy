@@ -1,0 +1,26 @@
+Delivered-To: client@gmail.com
+Received: by 2002:a05:6a10:5555 with SMTP id q7; Wed, 5 Nov 2026 02:55:19 -0800 (PST)
+Return-Path: <chase.alerts.secure2026@gmail.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20230601 header.b=Lm8nOp;
+       spf=pass (google.com: domain of chase.alerts.secure2026@gmail.com designates 209.85.220.69 as permitted sender) smtp.mailfrom=chase.alerts.secure2026@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com
+From: Chase Online Banking <chase.alerts.secure2026@gmail.com>
+To: client@gmail.com
+Subject: Urgent: Unusual sign-in activity - verify your account within 24 hours
+Date: Wed, 05 Nov 2026 02:55:01 -0800
+Message-ID: <CAHx4Fq2@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body style="font-family:Arial,sans-serif">
+<div style="background:#117aca;color:#fff;padding:14px;font-size:20px">CHASE</div>
+<p>Dear Customer,</p>
+<p>We detected an unusual sign-in to your Chase account from a new device. For your protection, online access has been limited.</p>
+<p>Please verify your identity within 24 hours to restore access:</p>
+<p><a href="http://chase-online-verify.com/login?session=9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c">https://www.chase.com/verify</a></p>
+<p>If you do not verify, your account will be suspended.</p>
+<p>Sincerely,<br>Chase Fraud Department</p>
+<p style="font-size:10px;color:#888">JPMorgan Chase Bank, N.A. Member FDIC</p>
+</body></html>

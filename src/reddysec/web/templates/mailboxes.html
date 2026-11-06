@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip, csrf with context %}
+{% block title %}Mailboxes · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Mailboxes</h1>
+  <p class="lede">The mailboxes we watch for you, and how closely.</p>
+</header>
+
+{% if mailboxes %}
+<section class="stack-lg">
+  {% for m in mailboxes %}
+  <article class="card mailbox-card">
+    <div class="card-head">
+      <div>
+        <h2>{{ m.row.address }}</h2>
+        <p class="muted">{{ m.row.provider | provider }}{% if m.row.last_sync_at %} · last checked {{ m.row.last_sync_at | ago }}{% endif %}</p>
+      </div>
+      <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
+    </div>
+    {% if m.row.last_error and m.row.status == "error" %}
+    <p class="flash flash-warn">We hit a problem with this mailbox: {{ m.row.last_error }}</p>
+    {% endif %}
+    {% if m.owned and m.row.status != "disconnected" %}
+    <form method="post" action="/mailboxes/{{ m.row.id }}/mode" class="mode-form">
+      {{ csrf() }}
+      <fieldset>
+        <legend>Protection mode</legend>
+        <label class="radio">
+          <input type="radio" name="mode" value="scan"{% if m.row.mode == "scan" %} checked{% endif %}>
+          <span><strong>Scan.</strong> Email lands as usual and is labelled Checked, Suspicious or Quarantine within seconds. Dangerous email is moved out of the inbox.</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="mode" value="hold"{% if m.row.mode == "hold" %} checked{% endif %}>
+          <span><strong>Hold.</strong> New email waits out of sight until we have checked it, usually under a minute and at most {{ hold_timeout_s }} seconds. If our service ever stops, a safety switch releases everything within {{ hold_minutes }} minutes. Nothing is ever stuck.</span>
+        </label>
+      </fieldset>
+      <button class="btn btn-quiet" type="submit">Save mode</button>
+    </form>
+    <div class="actions actions-wrap">
+      {% if m.row.status == "active" %}
+      <form method="post" action="/mailboxes/{{ m.row.id }}/pause" data-confirm="Pause protection? New email will not be checked until you resume.">
+        {{ csrf() }}
+        <button class="btn btn-quiet" type="submit">Pause protection</button>
+      </form>
+      {% else %}
+      <form method="post" action="/mailboxes/{{ m.row.id }}/resume">
+        {{ csrf() }}
+        <button class="btn btn-primary" type="submit">Resume protection</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/mailboxes/{{ m.row.id }}/disconnect" data-confirm="Disconnect this mailbox? We will delete its password or token and stop checking it.">
+        {{ csrf() }}
+        <button class="btn btn-danger" type="submit">Disconnect</button>
+      </form>
+    </div>
+    {% elif not m.owned %}
+    <p class="muted small">Only the account owner can change this mailbox.</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty">
+  <h2>No mailbox yet</h2>
+  <p class="muted">Connect one and we start checking new email within a minute.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Add a mailbox</h2>
+  <div class="actions actions-wrap">
+    {% if google_login_enabled %}
+    <a class="btn btn-primary" href="/auth/google/start?next=/mailboxes">Connect Gmail</a>
+    {% endif %}
+    <a class="btn btn-quiet" href="/mailboxes/add-imap">Add Yahoo, iCloud, Outlook.com or another mailbox</a>
+  </div>
+</section>
+{% endblock %}

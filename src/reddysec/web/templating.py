@@ -1,0 +1,89 @@
+"""Jinja environment and the ``render`` helper every page uses.
+
+``StrictUndefined`` is on purpose: a typo in a template raises during the
+functional tests instead of printing an empty string on a client's report.
+"""
+
+from __future__ import annotations
+
+from importlib import resources
+from pathlib import Path
+from typing import Any
+
+from fastapi import Request
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+from starlette.responses import HTMLResponse
+from starlette.templating import Jinja2Templates
+
+from reddysec import __version__
+
+from . import presenters
+from .queries import is_staff
+from .security import csrf_token, pop_flashes
+
+NAV_ITEMS: tuple[tuple[str, str], ...] = (("/", "Home"), ("/mailboxes", "Mailboxes"), ("/audit", "Audit"))
+STAFF_NAV_ITEMS: tuple[tuple[str, str], ...] = (("/concierge", "Concierge"),)
+SETTINGS_NAV_ITEM: tuple[str, str] = ("/settings/security", "Settings")
+
+
+def package_path(name: str) -> Path:
+    """``templates`` and ``static`` ship inside the package so the app works
+    from a wheel, not only from a checkout."""
+    return Path(str(resources.files("reddysec.web").joinpath(name)))
+
+
+def _context_processor(request: Request) -> dict[str, Any]:
+    """Values every template needs. ``user`` is whatever ``current_user`` left on
+    ``request.state`` (``None`` on anonymous pages such as sign-in)."""
+    state = request.app.state
+    user = getattr(request.state, "user", None)
+    nav = list(NAV_ITEMS)
+    if user is not None and is_staff(user):
+        nav.extend(STAFF_NAV_ITEMS)
+    nav.append(SETTINGS_NAV_ITEM)
+    # Error pages leave queued flashes alone so the message the client was
+    # meant to see survives until the next real page.
+    keep_flashes = bool(getattr(request.state, "keep_flashes", False))
+    return {
+        "user": user,
+        "csrf_token": csrf_token(request) if "session" in request.scope else "",
+        "flashes": [] if keep_flashes else pop_flashes(request),
+        "nav_items": nav,
+        "current_path": request.url.path,
+        "room_enabled": bool(getattr(state, "room_enabled", False)),
+        "google_login_enabled": getattr(state, "oauth", None) is not None,
+        "dev_login_enabled": bool(getattr(state, "dev_login_enabled", False)),
+        "app_version": __version__,
+    }
+
+
+def build_templates() -> Jinja2Templates:
+    env = Environment(
+        loader=FileSystemLoader(str(package_path("templates"))),
+        autoescape=select_autoescape(["html", "xml"]),
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    env.filters["dt"] = presenters.format_dt
+    env.filters["ago"] = presenters.humanize_ago
+    env.filters["provider"] = presenters.provider_label
+    env.filters["lane"] = presenters.lane_short
+    env.filters["action_phrase"] = presenters.action_phrase
+    return Jinja2Templates(env=env, context_processors=[_context_processor])
+
+
+def render(
+    request: Request, name: str, context: dict[str, Any] | None = None, *, status_code: int = 200
+) -> HTMLResponse:
+    templates: Jinja2Templates = request.app.state.templates
+    return templates.TemplateResponse(request, name, context or {}, status_code=status_code)
+
+
+def wants_json(request: Request) -> bool:
+    """API callers get JSON errors; browsers get a page. The path decides, with
+    the Accept header as a fallback for fetch() calls to HTML routes."""
+    if request.url.path.startswith("/api/") or request.url.path.startswith("/hooks/"):
+        return True
+    accept = request.headers.get("accept", "")
+    return "application/json" in accept and "text/html" not in accept

@@ -1,0 +1,89 @@
+# syntax=docker/dockerfile:1.7
+# Reddy Security detonation chamber. One container per detonation. It opens a
+# hostile page or file in Chromium, records what happens, prints the result
+# and exits. It is the part of the system we expect to be attacked, so:
+#
+#   * runs as uid 10001 (sandbox), no home directory outside /tmp
+#   * no shells, no curl/wget/git/ssh, no pip: python (and the Node driver
+#     that Playwright needs) are the only interpreters left
+#   * writes nothing outside /tmp -> run with a read-only root filesystem
+#   * holds no credentials, no managed identity (enforced by Azure Policy)
+#
+# Local (docker backend), what the worker passes:
+#   docker run --rm --read-only --tmpfs /tmp:rw,size=512m --shm-size 256m \
+#     --cap-drop ALL --security-opt no-new-privileges \
+#     --security-opt seccomp=src/reddysec/chamber/seccomp-chamber.json \
+#     --network reddysec-detonation --memory 2g --cpus 1.5 --pids-limit 512 \
+#     -e RS_JOB='{...}' reddysec-chamber:local --env
+# Azure (aci backend): ACI container group, see docs/azure-deploy.md.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.chamber -t reddysec-chamber:local .
+
+ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright/python:v1.63.0-noble
+
+# ---------------------------------------------------------------------------
+# build
+# ---------------------------------------------------------------------------
+FROM ${PLAYWRIGHT_IMAGE} AS build
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /build
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+# Core dependencies only: no azure extra, no dev tools. Playwright pinned to
+# the version whose browsers are baked into the base image.
+RUN python -m venv /opt/venv \
+    && printf 'playwright==1.63.0\n' > /tmp/constraints.txt \
+    && /opt/venv/bin/pip install --constraint /tmp/constraints.txt "." \
+    && /opt/venv/bin/python -m compileall -q /opt/venv/lib \
+    && /opt/venv/bin/python -c "import reddysec, playwright"
+
+# ---------------------------------------------------------------------------
+# runtime
+# ---------------------------------------------------------------------------
+FROM ${PLAYWRIGHT_IMAGE} AS runtime
+
+LABEL org.opencontainers.image.title="reddysec-chamber" \
+      org.opencontainers.image.description="Reddy Security detonation chamber (disposable)" \
+      org.opencontainers.image.source="https://github.com/dandaakhilreddy/reddy-security"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin" \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    HOME=/tmp/sandbox \
+    TMPDIR=/tmp \
+    XDG_CONFIG_HOME=/tmp/sandbox/.config \
+    XDG_CACHE_HOME=/tmp/sandbox/.cache \
+    XDG_RUNTIME_DIR=/tmp/sandbox/run
+
+COPY --from=build /opt/venv /opt/venv
+
+# 1. sandbox user; 2. strip tooling. apt-get purge removes the network and VCS
+# clients the base image ships "for feature parity with node images"; the final
+# rm removes the shells and pip. Removing /bin/sh is the LAST command of the
+# LAST RUN on purpose: nothing after it can use a shell, including us.
+RUN groupadd --gid 10001 sandbox \
+    && useradd --uid 10001 --gid sandbox --no-create-home --home-dir /tmp/sandbox --shell /usr/sbin/nologin sandbox \
+    && chown -R root:root /opt/venv && chmod -R a-w /opt/venv \
+    && apt-get purge -y --auto-remove curl wget git openssh-client gpg gnupg >/dev/null 2>&1 || true \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt /root/.cache /tmp/* \
+    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 /usr/bin/pip /usr/bin/pip3 \
+              /opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.12 \
+    && rm -rf /opt/venv/lib/python3.12/site-packages/pip /opt/venv/lib/python3.12/site-packages/pip-* \
+    && rm -f /usr/bin/apt /usr/bin/apt-get /usr/bin/apt-cache /usr/bin/dpkg /usr/bin/nc /usr/bin/netcat /usr/bin/telnet /usr/bin/scp /usr/bin/ssh \
+    && rm -f /usr/bin/bash /usr/bin/dash /usr/bin/sh /usr/bin/rbash
+
+USER 10001:10001
+WORKDIR /tmp
+
+# No HEALTHCHECK: a detonation is a one-shot job; the worker owns its lifetime.
+ENTRYPOINT ["/opt/venv/bin/python", "-m", "reddysec.chamber.detonate"]
+# --stdio: job JSON on stdin, result JSON on stdout (local/docker backends).
+# --env:   job JSON in RS_JOB (ACI backend: secure environment variable).
+CMD ["--stdio"]

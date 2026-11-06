@@ -1,0 +1,64 @@
+Delivered-To: client@gmail.com
+Received: from mail233.suw15.mcsv.net (mail233.suw15.mcsv.net. [198.2.180.233]) by mx.google.com with ESMTPS id q12si; Wed, 5 Nov 2026 06:02:11 -0800 (PST)
+Return-Path: <bounce-mc.us14_12345678.987654-client=gmail.com@mail233.suw15.mcsv.net>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@mail233.suw15.mcsv.net header.s=k3 header.b=aB3dEf;
+       dkim=pass header.i=@harborlightjournal.com header.s=k1 header.b=Zz9yXw;
+       spf=pass (google.com: domain of bounce-mc.us14_12345678.987654-client=gmail.com@mail233.suw15.mcsv.net designates 198.2.180.233 as permitted sender) smtp.mailfrom="bounce-mc.us14_12345678.987654-client=gmail.com@mail233.suw15.mcsv.net";
+       dmarc=pass (p=QUARANTINE sp=QUARANTINE dis=NONE) header.from=harborlightjournal.com
+From: Harbor Light Journal <editor@harborlightjournal.com>
+Reply-To: editor@harborlightjournal.com
+To: client@gmail.com
+Subject: This week: the harbor cleanup, a new bakery, and the winter market dates
+Date: Wed, 05 Nov 2026 06:01:40 -0800
+Message-ID: <a1b2c3d4e5f6.20261105@mail233.suw15.mcsv.net>
+List-Unsubscribe: <https://harborlightjournal.us14.list-manage.com/unsubscribe?u=12345678&id=987654&e=abcdef1234>, <mailto:unsubscribe-mc.us14_12345678.987654-client=gmail.com@mailin1.us14.mcsv.net?subject=unsubscribe>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+List-ID: 12345678mc list <12345678.mailchimp.com>
+X-Mailer: MailChimp Mailer - **CID12345678**
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="_----------=_MCPart_1234567890"
+
+--_----------=_MCPart_1234567890
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+HARBOR LIGHT JOURNAL =E2=80=94 Weekly
+
+Volunteers cleared 400 lbs of debris from the north shore on Sunday. Read =
+the full story: https://harborlightjournal.us14.list-manage.com/track/clic=
+k?u=3D12345678&id=3Dabcdef0123&e=3Dabcdef1234
+
+The winter market opens November 22. Vendor list and hours: https://harbor=
+lightjournal.com/winter-market-2026
+
+Copyright 2026 Harbor Light Journal. You are receiving this because you si=
+gned up at our website.
+Unsubscribe: https://harborlightjournal.us14.list-manage.com/unsubscribe?u=
+=3D12345678&id=3D987654&e=3Dabcdef1234
+
+--_----------=_MCPart_1234567890
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<!doctype html><html><head><meta charset=3D"utf-8"><title>Harbor Light Jou=
+rnal</title></head><body style=3D"font-family:Georgia,serif">
+<h1>Harbor Light Journal</h1>
+<p>Volunteers cleared 400 lbs of debris from the north shore on Sunday. <a=
+ href=3D"https://harborlightjournal.us14.list-manage.com/track/click?u=3D1=
+2345678&amp;id=3Dabcdef0123&amp;e=3Dabcdef1234">Read the full story</a>.</=
+p>
+<p>The winter market opens November 22. <a href=3D"https://harborlightjour=
+nal.com/winter-market-2026">Vendor list and hours</a>.</p>
+<p>A new bakery, Crumb &amp; Co., opens Friday on Elm Street.</p>
+<p style=3D"font-size:11px;color:#777">Copyright 2026 Harbor Light Journal=
+. <a href=3D"https://harborlightjournal.us14.list-manage.com/unsubscribe?u=
+=3D12345678&amp;id=3D987654&amp;e=3Dabcdef1234">Unsubscribe</a> | <a href=
+=3D"https://harborlightjournal.us14.list-manage.com/profile?u=3D12345678&a=
+mp;id=3D987654&amp;e=3Dabcdef1234">Update preferences</a></p>
+<img src=3D"https://harborlightjournal.us14.list-manage.com/track/open.php=
+?u=3D12345678&amp;id=3Dabcdef0123&amp;e=3Dabcdef1234" height=3D"1" width=
+=3D"1" alt=3D"">
+</body></html>
+
+--_----------=_MCPart_1234567890--

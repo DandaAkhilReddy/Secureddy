@@ -1,0 +1,24 @@
+Delivered-To: client@gmail.com
+Received: by 2002:a05:6a10:1234 with SMTP id abc; Wed, 5 Nov 2026 09:12:03 -0800 (PST)
+Return-Path: <maria.lindqvist@gmail.com>
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20230601 header.b=K7xT2mQp;
+       spf=pass (google.com: domain of maria.lindqvist@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=maria.lindqvist@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com
+From: Maria Lindqvist <maria.lindqvist@gmail.com>
+To: client@gmail.com
+Subject: Dinner on Saturday?
+Date: Wed, 05 Nov 2026 09:11:58 -0800
+Message-ID: <CAF1xQ9kL8@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: 7bit
+
+Hi!
+
+Are you still free on Saturday? Jonas found a new Thai place near the
+water and wants to try it. Around 7?
+
+Let me know, and say hi to the kids.
+
+Maria

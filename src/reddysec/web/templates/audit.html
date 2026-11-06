@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Audit log · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Audit log</h1>
+  <p class="lede">Everything anyone did to your mailboxes, including us. {{ total }} entr{{ "y" if total == 1 else "ies" }} in all.</p>
+</header>
+
+{% if entries %}
+<div class="card table-wrap">
+  <table class="table">
+    <thead>
+      <tr><th>When</th><th>Who</th><th>What</th><th class="col-hide-sm">Where</th></tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td><time datetime="{{ e.row.at.isoformat() }}" title="{{ e.row.at | dt }}">{{ e.row.at | ago }}</time></td>
+        <td>{{ e.actor }}</td>
+        <td>
+          {{ e.action }}
+          {% if e.detail %}<span class="muted small block">{{ e.detail }}</span>{% endif %}
+          {% if e.row.target and e.row.target.startswith("msg_") %}<a class="link small" href="/messages/{{ e.row.target }}">Open the report</a>{% endif %}
+        </td>
+        <td class="col-hide-sm muted">{{ e.row.target if e.row.target and "@" in e.row.target else "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% if page > 1 %}<a class="btn btn-quiet btn-small" href="/audit?page={{ page - 1 }}">Newer</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn btn-quiet btn-small" href="/audit?page={{ page + 1 }}">Older</a>{% endif %}
+</nav>
+{% endif %}
+{% else %}
+<section class="card empty">
+  <h2>Nothing yet</h2>
+  <p class="muted">Actions on your account and mailboxes will appear here.</p>
+</section>
+{% endif %}
+{% endblock %}
