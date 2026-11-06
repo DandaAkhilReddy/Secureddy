@@ -132,6 +132,14 @@ param tokenKekPreviousVersion string = ''
 // --- integrations ----------------------------------------------------------
 param googleClientId string = ''
 param googlePubsubTopic string = ''
+@description('Entra app id for Sign in with Microsoft + Graph mail. Needs Key Vault secrets rs-microsoft-client-cert and rs-microsoft-cert-thumbprint. Empty = off.')
+param microsoftClientId string = ''
+@description('RS_ANTHROPIC_API_KEY from Key Vault secret rs-anthropic-api-key.')
+param anthropicEnabled bool = false
+@description('RS_LLM_PROVIDER when Azure OpenAI is off (none | anthropic | azure_foundry).')
+param llmProvider string = ''
+@description('RS_ASSISTANT_PROVIDER for Ask Secureddy; empty follows RS_LLM_PROVIDER.')
+param assistantProvider string = ''
 param safeBrowsingEnabled bool = false
 param azureOpenAiEnabled bool = false
 param azureOpenAiEndpoint string = ''
@@ -414,6 +422,10 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
     tokenKekPreviousVersion: tokenKekPreviousVersion
     googleClientId: googleClientId
     googlePubsubTopic: googlePubsubTopic
+    microsoftClientId: microsoftClientId
+    anthropicEnabled: anthropicEnabled
+    llmProvider: llmProvider
+    assistantProvider: assistantProvider
     safeBrowsingEnabled: safeBrowsingEnabled
     azureOpenAiEnabled: azureOpenAiEnabled
     azureOpenAiEndpoint: azureOpenAiEndpoint

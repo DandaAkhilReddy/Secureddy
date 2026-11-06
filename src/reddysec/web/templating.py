@@ -6,6 +6,8 @@ functional tests instead of printing an empty string on a client's report.
 
 from __future__ import annotations
 
+import hashlib
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -36,10 +38,40 @@ NAV_ICONS = {
 }
 
 
+# Phones get a bottom tab bar with the four places people go most.
+TAB_ITEMS: tuple[tuple[str, str, str], ...] = (
+    ("/", "Home", "home"),
+    ("/messages", "Email", "mail"),
+    ("/assistant", "Ask", "chat"),
+    ("/mailboxes", "Mailboxes", "inbox"),
+)
+THEME_COOKIE = "rs_theme"
+THEMES = ("system", "dark", "light")
+
+
+def theme_of(request: Request) -> str:
+    value = request.cookies.get(THEME_COOKIE, "system")
+    return value if value in THEMES else "system"
+
+
 def package_path(name: str) -> Path:
     """``templates`` and ``static`` ship inside the package so the app works
     from a wheel, not only from a checkout."""
     return Path(str(resources.files("reddysec.web").joinpath(name)))
+
+
+@lru_cache(maxsize=1)
+def asset_version() -> str:
+    """A short hash of the shipped static files: added to asset URLs as
+    ``?v=`` and to the service worker's cache name, so a deploy that changes
+    the stylesheet or scripts is picked up at once."""
+    digest = hashlib.sha256()
+    static = package_path("static")
+    for path in sorted(static.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(static).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
 
 
 def _context_processor(request: Request) -> dict[str, Any]:
@@ -62,6 +94,11 @@ def _context_processor(request: Request) -> dict[str, Any]:
         "current_path": request.url.path,
         "room_enabled": bool(getattr(state, "room_enabled", False)),
         "google_login_enabled": getattr(state, "oauth", None) is not None,
+        "microsoft_login_enabled": getattr(state, "microsoft_oauth", None) is not None,
+        "yahoo_login_enabled": getattr(state, "yahoo_oauth", None) is not None,
+        "tab_items": TAB_ITEMS,
+        "theme": theme_of(request),
+        "asset_version": asset_version(),
         "dev_login_enabled": bool(getattr(state, "dev_login_enabled", False)),
         "app_version": __version__,
     }
@@ -84,7 +121,11 @@ def build_templates() -> Jinja2Templates:
     env.filters["action_phrase"] = presenters.action_phrase
     env.globals["SAFE_REASONS"] = presenters.SAFE_REASON_CHOICES
     env.globals["FAKE_REASONS"] = presenters.FAKE_REASON_CHOICES
+    env.globals["NOT_FAKE_REASONS"] = presenters.NOT_FAKE_REASON_CHOICES
     env.globals["NAV_ICONS"] = NAV_ICONS
+    env.globals["PROVIDER_LOGOS"] = {
+        "gmail": "google", "microsoft": "microsoft", "outlook": "microsoft", "yahoo": "yahoo",
+    }
     return Jinja2Templates(env=env, context_processors=[_context_processor])
 
 

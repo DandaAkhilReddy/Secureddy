@@ -32,7 +32,18 @@ from reddysec.store.db import Database, get_database
 
 from . import auth
 from .auth import LoginRequired, OAuthProvider
-from .routes import api, assistant, audit, concierge, dashboard, hooks, mailboxes, messages, notifications
+from .routes import (
+    api,
+    assistant,
+    audit,
+    concierge,
+    dashboard,
+    hooks,
+    mailboxes,
+    messages,
+    notifications,
+    pwa,
+)
 from .routes import settings as settings_routes
 from .security import (
     RateLimiter,
@@ -46,6 +57,8 @@ from .templating import build_templates, package_path, render, wants_json
 log = get_logger(__name__)
 
 GmailPushHandler = Callable[[str, str], Awaitable[None]]
+# (host, port, username, password) -> None; raises AuthExpired / ConnectorError.
+ImapTester = Callable[[str, int, str, str], Awaitable[None]]
 
 ERROR_TITLES = {
     400: "That request was not valid",
@@ -68,6 +81,9 @@ def create_app(
     artifact_store: ArtifactStore | None = None,
     enable_reading_room: bool = False,
     chat_model: ChatModel | None = None,
+    microsoft_oauth: OAuthProvider | None = None,
+    yahoo_oauth: OAuthProvider | None = None,
+    imap_tester: ImapTester | None = None,
 ) -> FastAPI:
     """Build the FastAPI application.
 
@@ -95,6 +111,10 @@ def create_app(
     owns_database = db is None
     if oauth is None:
         oauth = default_oauth(settings)
+    if microsoft_oauth is None:
+        microsoft_oauth = default_microsoft_oauth(settings)
+    if yahoo_oauth is None:
+        yahoo_oauth = default_yahoo_oauth(settings)
     store = artifact_store or artifact_store_from_settings(settings)
 
     owned_http = None
@@ -140,6 +160,9 @@ def create_app(
     app.state.settings = settings
     app.state.db = database
     app.state.oauth = oauth
+    app.state.microsoft_oauth = microsoft_oauth
+    app.state.yahoo_oauth = yahoo_oauth
+    app.state.imap_tester = imap_tester or test_imap_login
     app.state.cipher = TokenCipher.from_settings(
         settings.token_kek.get_secret_value(),
         settings.secret_key.get_secret_value(),
@@ -183,6 +206,7 @@ def create_app(
         settings_routes.router,
         hooks.router,
         api.router,
+        pwa.router,
     ):
         app.include_router(router)
     if room_router is not None:
@@ -208,6 +232,46 @@ def default_oauth(settings: Settings) -> OAuthProvider | None:
         settings.google_redirect_uri,
         state_signer_secret=settings.secret_key.get_secret_value(),
     )
+
+
+def default_microsoft_oauth(settings: Settings) -> OAuthProvider | None:
+    """Built only when ``RS_MICROSOFT_CLIENT_ID`` and ``RS_MICROSOFT_CLIENT_CERT``
+    are set. A certificate that cannot be read hides the button and logs an
+    error rather than stopping the whole site."""
+    if not settings.microsoft_enabled:
+        return None
+    from reddysec.mail.factory import make_microsoft_oauth  # lazy: pulls in the Graph connector
+
+    try:
+        return make_microsoft_oauth(settings)
+    except ValueError as exc:
+        log.error("microsoft_oauth_misconfigured", error=str(exc))
+        return None
+
+
+def default_yahoo_oauth(settings: Settings) -> OAuthProvider | None:
+    if not settings.yahoo_enabled:
+        return None
+    from reddysec.mail.factory import make_yahoo_oauth
+
+    return make_yahoo_oauth(settings)
+
+
+async def test_imap_login(host: str, port: int, username: str, password: str) -> None:
+    """The real "Test connection": an IMAP login through ``ImapConnector``."""
+    from reddysec.mail.imap import ImapConnector, ImapCredentials
+    from reddysec.models import Provider
+
+    connector = ImapConnector(
+        "test-connection",
+        username,
+        Provider.GENERIC_IMAP,
+        ImapCredentials(username=username, password=password, host=host, port=port),
+    )
+    await connector.check_login()
+
+
+test_imap_login.__test__ = False  # type: ignore[attr-defined]  # not a pytest test
 
 
 def _register_health(app: FastAPI) -> None:

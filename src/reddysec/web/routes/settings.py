@@ -17,7 +17,7 @@ from reddysec.store.models import UserRow
 from .. import queries
 from ..auth import PASSWORD_MIN_LENGTH, current_user, hash_password, new_totp_secret, totp_uri, verify_totp
 from ..security import flash
-from ..templating import render
+from ..templating import THEME_COOKIE, THEMES, render
 from . import protected_router
 
 router = protected_router()
@@ -120,3 +120,18 @@ async def password_set(
         queries.audit(session, actor=row, action="password_set")
     flash(request, "Your password is set. You can now sign in with your email and password.")
     return _see_other()
+
+
+@router.post("/settings/theme", name="theme_set")
+async def theme_set(request: Request, theme: str = Form("system"), user: UserRow = Depends(current_user)) -> Response:
+    """Dark is the brand; "system" follows the phone or laptop. A plain cookie
+    (not the session) so the choice survives signing out on this device."""
+    choice = theme if theme in THEMES else "system"
+    response = _see_other()
+    response.set_cookie(
+        THEME_COOKIE, choice, max_age=365 * 24 * 3600, path="/", samesite="lax",
+        secure=request.app.state.settings.is_prod, httponly=True,
+    )
+    flash(request, {"system": "Appearance follows your device.", "dark": "Dark appearance is on.",
+                    "light": "Light appearance is on."}[choice])
+    return response

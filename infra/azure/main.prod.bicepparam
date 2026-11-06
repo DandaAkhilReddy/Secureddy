@@ -47,6 +47,10 @@ param logLevel = 'INFO'
 // Integrations
 param googleClientId = '' // CHANGE: from the GCP OAuth client (docs/google-oauth-setup.md)
 param googlePubsubTopic = '' // CHANGE: projects/<gcp-project>/topics/reddysec-gmail
+param microsoftClientId = '' // CHANGE: Entra app id; needs rs-microsoft-client-cert + rs-microsoft-cert-thumbprint
+param anthropicEnabled = false // needs rs-anthropic-api-key
+param llmProvider = 'none'
+param assistantProvider = ''
 param safeBrowsingEnabled = false
 param azureOpenAiEnabled = false
 param azureOpenAiEndpoint = ''

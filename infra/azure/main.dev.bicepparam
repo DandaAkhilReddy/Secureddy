@@ -56,6 +56,15 @@ param logLevel = 'DEBUG'
 // Integrations (CHANGE when you have them; secrets live in Key Vault)
 param googleClientId = '533261991462-713nthol9j37igot6g9r03v62al0vrsb.apps.googleusercontent.com'
 param googlePubsubTopic = ''
+// Entra app "Secureddy" (multi-tenant + personal accounts). Certificate auth:
+// Key Vault secrets rs-microsoft-client-cert (PEM key + cert) and
+// rs-microsoft-cert-thumbprint must exist.
+param microsoftClientId = '8cc0907f-7f8e-45ec-9758-102eea8c1a00'
+// Claude for the assistant and the second-opinion reviewer. Turn on once Key
+// Vault secret rs-anthropic-api-key exists.
+param anthropicEnabled = false
+param llmProvider = 'none'
+param assistantProvider = ''
 param safeBrowsingEnabled = false
 param azureOpenAiEnabled = false
 param smtpEnabled = false

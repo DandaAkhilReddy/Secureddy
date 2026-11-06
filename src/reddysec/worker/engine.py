@@ -260,7 +260,9 @@ class Worker:
     # ------------------------------------------------------------- loop
     @property
     def poll_interval_s(self) -> float:
-        return float(min(self._settings.gmail_poll_seconds, self._settings.imap_poll_seconds))
+        return float(
+            min(self._settings.gmail_poll_seconds, self._settings.imap_poll_seconds, self._settings.graph_poll_seconds)
+        )
 
     def wake(self) -> None:
         """Run the next cycle now (e.g. a Gmail Pub/Sub push arrived)."""
@@ -585,6 +587,8 @@ class Worker:
                 await repo.touch_contact(
                     session, mailbox.id, parsed.from_address, parsed.from_name, seen_at=raw.received_at
                 )
+            if verdict.trust_check is not None:
+                await repo.record_trust_check(session, mailbox.id, verdict.trust_check, at=self._clock())
             await repo.audit(
                 session,
                 None,
@@ -603,7 +607,14 @@ class Worker:
             )
             user = await repo.get_user(session, mailbox.user_id)
 
-        if user is not None and (verdict.level.rank >= policy.notify_at.rank or verdict.needs_human_review):
+        trust_changed = (
+            verdict.trust_check is not None
+            and verdict.trust_check.trusted_by_client
+            and verdict.trust_check.outcome == "changed"
+        )
+        if user is not None and trust_changed:
+            await self._notify_trust_changed(user, row, verdict)
+        elif user is not None and (verdict.level.rank >= policy.notify_at.rank or verdict.needs_human_review):
             await self._notifier.notify_verdict(user, row, verdict)
         if outcome != "ok" or verdict.needs_human_review:
             await self._notifier.notify_concierge(
@@ -611,6 +622,28 @@ class Worker:
                 f"Outcome: {outcome}. State: {state}. Level: {verdict.level.value}.\n{self._notifier.message_url(row.id)}",
             )
         return row
+
+    async def _notify_trust_changed(self, user: Any, row: MessageRow, verdict: Verdict) -> None:
+        """A sender the client trusts sent something we would not let through:
+        the most important notice we send, because it is how a hacked vendor
+        or friend's account shows up."""
+        check = verdict.trust_check
+        assert check is not None
+        what = "put it in Quarantine" if row.quarantined else "marked it Suspicious"
+        sender = row.from_address or check.value
+        body = (
+            f"You told us you trust {check.value}. This email from {sender} looks different, so we {what}. "
+            f"Subject: {(row.subject or '(no subject)')[:120]}\n"
+            "Do not click its links or reply until you have checked with them on a number you already have.\n"
+            f"Details: {self._notifier.message_url(row.id)}"
+        )
+        await self._notifier.notify_user(
+            user,
+            level=LEVEL_ALERT,
+            title="A sender you trust sent something unusual",
+            body=body,
+            message_id=row.id,
+        )
 
     async def _analyze(
         self,

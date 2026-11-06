@@ -263,6 +263,7 @@ SECURITY_HEADERS: dict[str, str] = {
     "Cross-Origin-Opener-Policy": "same-origin",
 }
 HSTS_HEADER = "max-age=31536000; includeSubDomains"
+STATIC_PREFIX = "/static/"
 
 
 class SecurityHeadersMiddleware:
@@ -279,11 +280,17 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = str(scope.get("path", ""))
+
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 for name, value in SECURITY_HEADERS.items():
                     headers.setdefault(name, value)
+                # Pages and JSON may be someone's mail: no browser or proxy keeps
+                # them. Static files revalidate. Routes that set their own value
+                # (artifacts, the manifest, the service worker) keep it.
+                headers.setdefault("Cache-Control", "no-cache" if path.startswith(STATIC_PREFIX) else "no-store")
                 if self.hsts:
                     headers.setdefault("Strict-Transport-Security", HSTS_HEADER)
             await send(message)

@@ -57,7 +57,7 @@ async def test_page_renders_with_suggestions_and_nav(client, seed, login):
     assert page.status_code == 200
     assert "What&#39;s suspicious this week?" in page.text and 'id="composer"' in page.text
     assert 'href="/assistant" aria-current="page"' in page.text
-    assert '<script src="/static/assistant.js" defer></script>' in page.text
+    assert re.search(r'<script src="/static/assistant.js\?v=[0-9a-f]{10}" defer></script>', page.text)
     assert "innerHTML" not in client.get("/static/assistant.js").text
 
 

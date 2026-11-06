@@ -11,8 +11,9 @@ Outlook.com), where enterprise email security products do not reach.
 
 ## How it works (one paragraph)
 
-The client signs in with Google (or adds an IMAP mailbox). We ask Gmail for
-the minimum access needed to read, label and move mail. New messages are
+The client signs in with Google, Microsoft or Yahoo (or adds an IMAP
+mailbox). We ask Gmail or Microsoft Graph for the minimum access needed to
+read, label and move mail; Yahoo Mail connects with an app password. New messages are
 fetched within seconds. Messages without links or attachments are released at
 once. Messages with links or attachments go through static analysis (sender
 authentication, lookalike domains, domain age, attachment type checks, QR
@@ -32,7 +33,9 @@ src/reddysec/
   core/       crypto (token encryption), ids, artifact store, job queue, logging
   analysis/   parsing, URL + attachment analysis, intel, BEC, policy, scoring, pipeline
   chamber/    detonation backends (local / docker / Azure ACI), Reading Room (RBI), CDR
-  mail/       Gmail (OAuth + API) and IMAP (Yahoo / iCloud / Outlook.com) connectors
+  mail/       Gmail (OAuth + API), Microsoft Graph (Outlook.com / Microsoft 365) and IMAP
+              (Yahoo / iCloud / Outlook.com app passwords) connectors; Google, Microsoft and
+              Yahoo sign-in
   store/      SQLAlchemy schema (metadata + verdicts only; never bodies)
   worker/     the processing loop and verdict actions
   web/        FastAPI app: sign-in, onboarding, dashboard, reports
@@ -101,14 +104,59 @@ What runs today, end to end, in this repository:
   `RS_ASSISTANT_MAX_TURNS` (6), `RS_ASSISTANT_DAILY_MESSAGE_LIMIT` (200).
 - Azure infrastructure as Bicep (validated), Dockerfiles, CI/CD, runbooks.
 
-Test suite: 1,379 tests (unit, functional, browser integration, and an
-end-to-end scenario that pushes a phishing email through the real parser,
-analyzer and Chromium sandbox into quarantine and the dashboard). Coverage
-94.9% (line + branch).
+## Status (6 Nov 2026): Microsoft, Yahoo, "Not fake", installable app
+
+- **Sign in with Microsoft** (`mail/oauth_microsoft.py`): personal and work
+  accounts, Authorization Code + PKCE, client authentication with a
+  certificate (RFC 7523 client assertion, RS256, `x5t` thumbprint) because the
+  tenant forbids client secrets. ID tokens are checked against Microsoft's
+  published keys, the per-tenant issuer, audience, expiry and nonce. Settings:
+  `RS_MICROSOFT_CLIENT_ID`, `RS_MICROSOFT_CLIENT_CERT` (Key Vault
+  `rs-microsoft-client-cert`), `RS_MICROSOFT_CERT_THUMBPRINT` (Key Vault
+  `rs-microsoft-cert-thumbprint`), `RS_MICROSOFT_AUTHORITY`,
+  `RS_MICROSOFT_REDIRECT_PATH`.
+- **Outlook / Microsoft 365 mail over Graph** (`mail/outlook_graph.py`):
+  folders `Secureddy/Checking` and `Secureddy/Quarantine`, coloured
+  categories for verdicts, delta-query polling, immutable message ids,
+  Retry-After throttling, token rotation persisted to the vault. Hold mode is
+  an inbox rule with no conditions that moves new mail to Checking: **validate
+  it on a real mailbox before offering Hold mode on Microsoft accounts.**
+- **Sign in with Yahoo** (`mail/oauth_yahoo.py`, sign-in only:
+  `RS_YAHOO_CLIENT_ID` / `RS_YAHOO_CLIENT_SECRET`). Yahoo Mail itself connects
+  on a "Connect your Yahoo Mail" page with an app password that is tested with
+  a real IMAP login before it is saved. The XOAUTH2 path is ready for the day
+  Yahoo approves us for its Mail API (see the module docstring).
+- **Accounts and linking** (`user_identities` table): one account per person,
+  any number of mailboxes. A sign-in is matched to an existing account by
+  email only when the provider verified the email (Google; Microsoft work
+  accounts with `xms_edov`; Yahoo's `email_verified`) or a Microsoft work
+  account already linked in the same tenant. Otherwise: "Already have an
+  account? Sign in first, then connect this mailbox." "Connect another
+  mailbox" on the Mailboxes page links by the signed-in session (POST + CSRF,
+  checked again in the signed state), never by email.
+- **"Not fake?"** on quarantined email (reasons: I know this sender, I was
+  expecting this, It's from a company I use, Other). **Trust never skips the
+  checks**: a sender the client trusts still has its links opened in the
+  sandbox. A clean result reads "Confirmed again"; anything serious reads
+  "This sender is on your trusted list, but this email looks different" and
+  sends a notification. `Verdict.trust_check` carries the outcome; the
+  Mailboxes page shows the reason, the date and "last confirmed · N emails
+  checked since" (`sender_trust_stats`).
+- **Installable web app**: manifest, service worker (shell only; pages are
+  network-first and never cached; private paths never touched), offline
+  page, install button (Chromium) and a one-time iOS hint. Bottom tab bar and
+  action sheet on phones, sidebar on laptops, warm light theme
+  (`prefers-color-scheme` or Settings).
+
+Test suite: 1,944 tests (1,911 unit and functional, 33 browser integration,
+including an end-to-end scenario that pushes a phishing email through the
+real parser, analyzer and Chromium sandbox into quarantine and the
+dashboard). Coverage 95.9% (line + branch, both suites).
 
 Not built yet, on purpose: a Windows chamber for Office/executable
 detonation (attachments are analysed statically and flattened to safe PDFs
 instead), per-session sandbox pods for the Reading Room (v1 runs sessions in
-the web process), and Yahoo OAuth (needs Yahoo's partner approval; app
-passwords work now). The Gmail Hold-mode filter must be validated against a
-real mailbox before anyone relies on it.
+the web process), and Yahoo Mail OAuth (needs Yahoo's partner approval; app
+passwords work now). The Gmail Hold-mode filter and the Microsoft Hold-mode
+inbox rule must be validated against real mailboxes before anyone relies on
+them.

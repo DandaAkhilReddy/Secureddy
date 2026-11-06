@@ -1,11 +1,28 @@
 {% extends "base.html" %}
-{% from "_macros.html" import csrf with context %}
+{% from "_macros.html" import csrf, icon with context %}
 {% block title %}Settings · Secureddy{% endblock %}
 {% block content %}
 <header class="page-head">
-  <h1>Sign-in settings</h1>
-  <p class="lede">How you prove it is you. These settings matter only for signing in with a password; Google sign-in is protected by Google.</p>
+  <h1>Settings</h1>
+  <p class="lede">How Secureddy looks on this device, and how you prove it is you. Password settings matter only for signing in with a password; Google and Microsoft sign-in are protected by them.</p>
 </header>
+
+<section class="card" aria-labelledby="look-title">
+  <div class="card-head">
+    <h2 id="look-title">Appearance</h2>
+    {{ icon("sun", "ico ico-title") }}
+  </div>
+  <form method="post" action="/settings/theme" class="theme-form">
+    {{ csrf() }}
+    <fieldset class="segmented">
+      <legend class="sr-only">Appearance</legend>
+      {% for value, label in (("system", "Match my device"), ("dark", "Dark"), ("light", "Light")) %}
+      <label class="seg"><input type="radio" name="theme" value="{{ value }}"{% if theme == value %} checked{% endif %}><span>{{ label }}</span></label>
+      {% endfor %}
+    </fieldset>
+    <button class="btn btn-quiet btn-small" type="submit">Save</button>
+  </form>
+</section>
 
 <section class="card">
   <div class="card-head">

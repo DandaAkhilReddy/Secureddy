@@ -39,7 +39,7 @@ async def test_safe_with_reason_is_stored_shown_escaped_and_audited(client, seed
     assert entry.scope == "domain"  # the trust math is unchanged by the reason
 
     page = client.get(f"/messages/{message.id}").text
-    assert "From now on, emails that Google confirms are from walmart.com will be marked Checked." in page
+    assert "Done. We marked it Checked. Next time walmart.com writes, we&#39;ll still check it and tell you if it&#39;s safe." in page
     assert "You marked this safe on " in page and "I ordered this / expected it. &lt;script&gt;" in page
     assert XSS not in page
     audit = client.get("/audit").text

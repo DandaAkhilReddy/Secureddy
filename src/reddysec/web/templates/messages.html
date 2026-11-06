@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, avatar, decide_forms, empty_art with context %}
+{% from "_macros.html" import chip, avatar, decide_forms, empty_art, trust_badge, connect_chooser with context %}
 {% block title %}All email · Secureddy{% endblock %}
 {% block content %}
 <header class="page-head">
@@ -53,11 +53,12 @@
         </span>
         <span class="mrow-subject">{{ r.message.subject or "(no subject)" }}</span>
         {% if r.reason %}<span class="mrow-reason">{{ r.reason }}</span>{% endif %}
+        {% if r.trust %}<span class="mrow-badges">{{ trust_badge(r.trust) }}</span>{% endif %}
       </span>
       <span class="mrow-chip">{{ chip(r.chip) }}</span>
     </a>
     {% if r.can_mark_safe or r.can_mark_fake %}
-    <div class="mrow-actions">{{ decide_forms(r.message.id, r.can_mark_safe, r.can_mark_fake, next=request.url.path ~ ('?' ~ request.url.query if request.url.query else ''), compact=True) }}</div>
+    <div class="mrow-actions">{{ decide_forms(r.message.id, r.can_mark_safe, r.can_mark_fake, next=request.url.path ~ ('?' ~ request.url.query if request.url.query else ''), compact=True, quarantined=r.quarantined) }}</div>
     {% endif %}
   </li>
   {% endfor %}

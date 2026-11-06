@@ -162,13 +162,19 @@ class TestDecisionFlash:
         ("decision", "expected"),
         [
             (SenderDecision("trusted", "domain", "walmart.com", True, False, "relabel"),
-             "From now on, emails that Google confirms are from walmart.com will be marked Checked."),
+             "Done. We marked it Checked. Next time walmart.com writes, we'll still check it and tell you if "
+             "it's safe."),
+            (SenderDecision("trusted", "domain", "walmart.com", True, False, "restore"),
+             "Done. We moved it back to your inbox. Next time walmart.com writes, we'll still check it and tell "
+             "you if it's safe."),
             (SenderDecision("trusted", "address", "f@gmail.com", True, True, "none"),
              "Many people send email from gmail.com"),
             (SenderDecision("trusted", "address", "a@b.com", True, False, "none"),
-             "We'll trust messages from a@b.com when Google confirms"),
+             "Done. Next time a@b.com writes, we'll still check it and tell you if it's safe. We trust them "
+             "when Google confirms"),
             (SenderDecision("trusted", "address", "a@b.com", False, False, "restore"),
-             "Because it wasn't verified by Google, we'll still check its links. We are moving this email back"),
+             "Done. We moved it back to your inbox. Next time a@b.com writes, we'll still check it and tell you "
+             "if it's safe. Because it wasn't verified by Google, we trust it only a little."),
             (SenderDecision("blocked", "domain", "bad.com", True, False, "quarantine"),
              "email from bad.com goes straight to Quarantine. We are moving this email to Quarantine now."),
             (SenderDecision("blocked", "address", "x@bad.com", True, True, "none"),

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, icon, avatar, decide_forms, empty_art, csrf with context %}
+{% from "_macros.html" import chip, icon, avatar, decide_forms, empty_art, csrf, trust_badge, connect_chooser with context %}
 {% block title %}Home · Secureddy{% endblock %}
 {% block content %}
 <header class="hero hero-{{ hero.tone }}">
@@ -15,7 +15,7 @@
   <ol class="steps">
     <li>
       <strong>Connect your mailbox.</strong>
-      <span>Gmail takes one click. Yahoo, iCloud and Outlook.com use an app password.</span>
+      <span>Gmail and Outlook take one click. Yahoo and iCloud use an app password.</span>
     </li>
     <li>
       <strong>Choose Scan or Hold.</strong>
@@ -26,12 +26,7 @@
       <span>Every link and file is opened on our servers first. You read the verdict here, in plain words.</span>
     </li>
   </ol>
-  <div class="actions actions-wrap">
-    {% if google_login_enabled %}
-    <a class="btn btn-primary" href="/auth/google/start?next=/mailboxes">Connect Gmail</a>
-    {% endif %}
-    <a class="btn btn-quiet" href="/mailboxes/add-imap">Add Yahoo, iCloud or Outlook.com</a>
-  </div>
+  {{ connect_chooser(google_login_enabled, microsoft_login_enabled) }}
 </section>
 {% else %}
 <section aria-labelledby="stats-title">
@@ -82,11 +77,12 @@
               </span>
               <span class="mrow-subject">{{ r.message.subject or "(no subject)" }}</span>
               <span class="mrow-reason">{{ r.reason or r.summary }}{% if r.message.lane %} <span class="mrow-lane">&middot; {{ r.message.lane | lane }}</span>{% endif %}</span>
+              {% if r.trust %}<span class="mrow-badges">{{ trust_badge(r.trust) }}</span>{% endif %}
             </span>
             <span class="mrow-chip">{{ chip(r.chip) }}</span>
           </a>
           {% if r.can_mark_safe or r.can_mark_fake %}
-          <div class="mrow-actions">{{ decide_forms(r.message.id, r.can_mark_safe, r.can_mark_fake, next="/", compact=True) }}</div>
+          <div class="mrow-actions">{{ decide_forms(r.message.id, r.can_mark_safe, r.can_mark_fake, next="/", compact=True, quarantined=r.quarantined) }}</div>
           {% endif %}
         </li>
         {% endfor %}

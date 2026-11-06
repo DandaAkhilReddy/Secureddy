@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,34 @@ class AttachmentVerdict(BaseModel):
     detonation_job_id: str | None = None
 
 
+TrustOutcome = Literal["confirmed", "changed", "incomplete"]
+
+
+class TrustCheck(BaseModel):
+    """How a message from a sender the client (or policy) trusts fared.
+
+    Trust never skips the checks: mail from a sender the client marked safe is
+    still analysed in full, links included. ``outcome`` says what we found:
+
+    * ``confirmed``  the new check is clean; the report says "Confirmed again".
+    * ``changed``    something serious turned up; the report and a notification
+                     say "This sender is on your trusted list, but this email
+                     looks different".
+    * ``incomplete`` we could not finish checking it (a sandbox timeout), so
+                     we neither confirm nor accuse.
+
+    ``scope``/``value`` name the trusted entry that matched (``domain`` +
+    ``walmart.com`` or ``address`` + ``ana@example.com``); ``reason`` is the
+    client's own reason in words, when they gave one.
+    """
+
+    trusted_by_client: bool
+    reason: str = ""
+    outcome: TrustOutcome
+    scope: str = ""
+    value: str = ""
+
+
 class Verdict(BaseModel):
     level: VerdictLevel
     score: int = Field(ge=0, le=100)
@@ -97,6 +125,8 @@ class Verdict(BaseModel):
     # one address. Empty for verdicts written before these fields existed.
     verified_domain: str = ""
     bulk_sender: bool = False
+    # Set when the sender is trusted (by the client or by policy). See TrustCheck.
+    trust_check: TrustCheck | None = None
 
     @property
     def top_signals(self) -> list[Signal]:

@@ -10,7 +10,8 @@ async def test_dashboard_empty_state_for_new_user(client, login):
     assert "Welcome back, Fresh." in page.text
     assert "Connect a mailbox and we start checking your email within a minute." in page.text
     assert "Three steps and you are protected" in page.text
-    assert "Connect Gmail" in page.text and "/auth/google/start?next=/mailboxes" in page.text
+    assert "Connect Gmail" in page.text and 'action="/auth/google/link"' in page.text
+    assert 'href="/mailboxes/connect-yahoo"' in page.text and "Outlook" in page.text
     assert "Recent email" not in page.text
 
 

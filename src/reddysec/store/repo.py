@@ -26,18 +26,22 @@ from reddysec.models import (
     ParsedMessage,
     RawMessage,
     SenderHistory,
+    TrustCheck,
     Verdict,
 )
+from reddysec.models.reasons import reason_words
 from reddysec.store.models import (
     AuditLog,
     Contact,
     DetonationRow,
+    FeedbackReasonRow,
     HoldHeartbeat,
     MailboxRow,
     MailboxSecret,
     MessageRow,
     NotificationRow,
     SenderFeedbackRow,
+    SenderTrustStatsRow,
     UserRow,
     utcnow,
 )
@@ -369,10 +373,26 @@ async def record_rescore(
 async def load_client_feedback(session: AsyncSession, mailbox_id: str) -> ClientFeedback:
     """Everything the client said about senders of one mailbox, in the shape
     ``AnalysisContext.feedback`` expects."""
-    rows = (
-        await session.execute(select(SenderFeedbackRow).where(SenderFeedbackRow.mailbox_id == mailbox_id))
-    ).scalars()
+    rows = list(
+        (
+            await session.execute(select(SenderFeedbackRow).where(SenderFeedbackRow.mailbox_id == mailbox_id))
+        ).scalars()
+    )
     fb = ClientFeedback()
+    trusted_ids = {row.id: row.value for row in rows if row.decision == "trusted"}
+    if trusted_ids:
+        reasons = (
+            await session.execute(
+                select(FeedbackReasonRow)
+                .where(FeedbackReasonRow.sender_feedback_id.in_(list(trusted_ids)))
+                .where(FeedbackReasonRow.decision == "safe")
+                .order_by(FeedbackReasonRow.created_at, FeedbackReasonRow.id)
+            )
+        ).scalars()
+        for reason in reasons:  # oldest first, so the newest reason wins
+            words = reason_words("safe", reason.reason_code or "", reason.reason_text or "")
+            if words:
+                fb.reasons[trusted_ids[reason.sender_feedback_id or ""].lower()] = words
     for row in rows:
         if row.decision == "blocked":
             if row.scope == "domain":
@@ -388,6 +408,39 @@ async def load_client_feedback(session: AsyncSession, mailbox_id: str) -> Client
         else:
             fb.trusted_addresses.append(row.value)
     return fb
+
+
+async def record_trust_check(
+    session: AsyncSession, mailbox_id: str, check: TrustCheck, *, at: datetime | None = None
+) -> SenderTrustStatsRow | None:
+    """Count one re-check of a client-trusted sender (``sender_trust_stats``).
+    Only client trust is counted: the Mailboxes page shows these numbers next
+    to the client's own "trusted" entries."""
+    if not check.trusted_by_client or not check.scope or not check.value:
+        return None
+    when = at or utcnow()
+    value = check.value.lower()
+    row = (
+        await session.execute(
+            select(SenderTrustStatsRow).where(
+                SenderTrustStatsRow.mailbox_id == mailbox_id,
+                SenderTrustStatsRow.scope == check.scope,
+                SenderTrustStatsRow.value == value,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = SenderTrustStatsRow(
+            id=new_id("sts"), mailbox_id=mailbox_id, scope=check.scope, value=value, emails_checked=0
+        )
+        session.add(row)
+    row.emails_checked = (row.emails_checked or 0) + 1
+    row.last_checked_at = when
+    row.last_outcome = check.outcome
+    if check.outcome == "confirmed":
+        row.last_confirmed_at = when
+    await session.flush()
+    return row
 
 
 async def mark_failed(session: AsyncSession, message_row: MessageRow, error: str | None = None) -> MessageRow:

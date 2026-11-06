@@ -9,7 +9,10 @@ The lanes trade latency against certainty:
                 spend a sandbox on it.
 * TRUSTED       authenticated mail from someone the client actually talks to
                 (or a domain they trust, in policy or by "This is safe"),
-                pointing only at well-known places.
+                pointing only at well-known places. Trust never skips the
+                checks: static checks always run, and mail from a sender the
+                *client* trusts still has its links opened in the sandbox
+                (see pipeline._finish), so we can confirm it again.
 * DETONATE      everything else.
 
 URL selection protects the client as much as it protects the sandbox budget:

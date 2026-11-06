@@ -108,6 +108,18 @@ param notifyWebhookUrl string = ''
 param googleClientId string = ''
 param googlePubsubTopic string = ''
 
+@description('Entra app (client) id for "Sign in with Microsoft" + Graph mail. Empty = Microsoft sign-in off and no Microsoft Key Vault references (the certificate secrets need not exist).')
+param microsoftClientId string = ''
+
+@description('Adds RS_ANTHROPIC_API_KEY from Key Vault secret rs-anthropic-api-key. The secret must exist before this is turned on.')
+param anthropicEnabled bool = false
+
+@description('RS_LLM_PROVIDER when Azure OpenAI is off: none | anthropic | azure_foundry | azure_openai. Empty = none.')
+param llmProvider string = ''
+
+@description('RS_ASSISTANT_PROVIDER for "Ask Secureddy": empty follows RS_LLM_PROVIDER.')
+param assistantProvider string = ''
+
 @description('KEK rotation: Key Vault version id of the PREVIOUS rs-token-kek. While set, the apps get it as RS_TOKEN_KEK_PREVIOUS so old ciphertexts still decrypt. Empty = single key.')
 param tokenKekPreviousVersion string = ''
 
@@ -236,7 +248,26 @@ var azureOpenAiEnv = azureOpenAiEnabled
       { name: 'RS_AZURE_OPENAI_DEPLOYMENT', value: azureOpenAiDeployment }
       { name: 'RS_AZURE_OPENAI_API_KEY', secretRef: 'rs-azure-openai-api-key' }
     ]
-  : [{ name: 'RS_LLM_PROVIDER', value: 'none' }]
+  : [{ name: 'RS_LLM_PROVIDER', value: empty(llmProvider) ? 'none' : llmProvider }]
+
+var assistantEnv = concat(
+  [{ name: 'RS_ASSISTANT_PROVIDER', value: assistantProvider }],
+  anthropicEnabled ? [{ name: 'RS_ANTHROPIC_API_KEY', secretRef: 'rs-anthropic-api-key' }] : []
+)
+
+// Microsoft (Outlook.com / Microsoft 365 via Graph). Wired like the Google
+// client secret, but only when a client id is set: the certificate lives in
+// Key Vault (rs-microsoft-client-cert, PEM key + cert) because the tenant
+// forbids client secrets. Every app gets it: the worker and the dead man's
+// switch build Graph connectors, the web app runs the sign-in.
+var microsoftEnabled = !empty(microsoftClientId)
+var microsoftEnv = microsoftEnabled
+  ? [
+      { name: 'RS_MICROSOFT_CLIENT_ID', value: microsoftClientId }
+      { name: 'RS_MICROSOFT_CLIENT_CERT', secretRef: 'rs-microsoft-client-cert' }
+      { name: 'RS_MICROSOFT_CERT_THUMBPRINT', secretRef: 'rs-microsoft-cert-thumbprint' }
+    ]
+  : []
 
 var smtpEnv = smtpEnabled
   ? [
@@ -249,7 +280,7 @@ var smtpEnv = smtpEnabled
 
 var kekPreviousEnv = empty(tokenKekPreviousVersion) ? [] : [{ name: 'RS_TOKEN_KEK_PREVIOUS', secretRef: 'rs-token-kek-previous' }]
 
-var optionalEnv = concat(safeBrowsingEnv, azureOpenAiEnv, smtpEnv, kekPreviousEnv)
+var optionalEnv = concat(safeBrowsingEnv, azureOpenAiEnv, assistantEnv, microsoftEnv, smtpEnv, kekPreviousEnv)
 
 // Key Vault references. Every secret listed here must exist or the revision
 // fails to provision. Optional ones are only listed when enabled.
@@ -272,20 +303,36 @@ func optionalSecrets(vaultUri string, identityId string, safeBrowsing bool, open
   smtp ? [{ name: 'rs-smtp-password', keyVaultUrl: kvRef(vaultUri, 'rs-smtp-password'), identity: identityId }] : []
 )
 
+func microsoftSecrets(vaultUri string, identityId string, enabled bool) array => enabled
+  ? [
+      { name: 'rs-microsoft-client-cert', keyVaultUrl: kvRef(vaultUri, 'rs-microsoft-client-cert'), identity: identityId }
+      { name: 'rs-microsoft-cert-thumbprint', keyVaultUrl: kvRef(vaultUri, 'rs-microsoft-cert-thumbprint'), identity: identityId }
+    ]
+  : []
+
+func anthropicSecrets(vaultUri string, identityId string, enabled bool) array => enabled
+  ? [{ name: 'rs-anthropic-api-key', keyVaultUrl: kvRef(vaultUri, 'rs-anthropic-api-key'), identity: identityId }]
+  : []
+
 var webSecrets = concat(
   baseSecrets(keyVaultUri, webIdentityId),
   optionalSecrets(keyVaultUri, webIdentityId, safeBrowsingEnabled, azureOpenAiEnabled, smtpEnabled),
+  microsoftSecrets(keyVaultUri, webIdentityId, microsoftEnabled),
+  anthropicSecrets(keyVaultUri, webIdentityId, anthropicEnabled),
   kekPreviousSecret(keyVaultUri, webIdentityId, tokenKekPreviousVersion)
 )
 var workerSecrets = concat(
   baseSecrets(keyVaultUri, workerIdentityId),
   optionalSecrets(keyVaultUri, workerIdentityId, safeBrowsingEnabled, azureOpenAiEnabled, smtpEnabled),
+  microsoftSecrets(keyVaultUri, workerIdentityId, microsoftEnabled),
+  anthropicSecrets(keyVaultUri, workerIdentityId, anthropicEnabled),
   kekPreviousSecret(keyVaultUri, workerIdentityId, tokenKekPreviousVersion),
   [{ name: 'acr-chamber-pull-password', keyVaultUrl: kvRef(keyVaultUri, 'acr-chamber-pull-password'), identity: workerIdentityId }]
 )
 var deadmanSecrets = concat(
   baseSecrets(keyVaultUri, deadmanIdentityId),
   optionalSecrets(keyVaultUri, deadmanIdentityId, false, false, smtpEnabled),
+  microsoftSecrets(keyVaultUri, deadmanIdentityId, microsoftEnabled),
   kekPreviousSecret(keyVaultUri, deadmanIdentityId, tokenKekPreviousVersion)
 )
 
@@ -472,7 +519,7 @@ resource deadman 'Microsoft.App/containerApps@2025-07-01' = {
           image: appImage
           command: ['reddysec', 'deadman']
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          env: concat(commonEnv, smtpEnv, kekPreviousEnv, [
+          env: concat(commonEnv, microsoftEnv, smtpEnv, kekPreviousEnv, [
             { name: 'AZURE_CLIENT_ID', value: deadmanClientId }
             { name: 'RS_LLM_PROVIDER', value: 'none' }
           ])

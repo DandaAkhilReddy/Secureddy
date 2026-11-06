@@ -107,4 +107,4 @@
   </section>
 </div>
 {% endblock %}
-{% block scripts %}{% if enabled %}<script src="/static/assistant.js" defer></script>{% endif %}{% endblock %}
+{% block scripts %}{% if enabled %}<script src="/static/assistant.js?v={{ asset_version }}" defer></script>{% endif %}{% endblock %}

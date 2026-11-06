@@ -94,7 +94,10 @@ async def test_report_renders_everything(client, seed, artifact_store, login, ri
     )
     assert "Release to my inbox" in text
     assert "Ask the concierge to review" in text
-    assert "Not suspicious?" in text and "Mark as safe" in text and "This is fake" in text
+    # Quarantined: the primary action is "Not fake?", with its own reasons.
+    assert "Not fake?" in text and "Not fake, move it back" in text and "This is fake" in text
+    assert "It&#39;s from a company I use" in text and "I was expecting this" in text
+    assert "Not suspicious?" not in text.split('id="decide"')[1].split("</section>")[0]
     assert "I know this sender" in text and "Asks for money or codes" in text  # quick-pick reasons
     assert f'action="/messages/{message.id}/safe"' in text and f'action="/messages/{message.id}/fake"' in text
     assert "Check again" in text and "Why we think this" in text and "What we checked" in text

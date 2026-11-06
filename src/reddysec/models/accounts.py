@@ -103,6 +103,9 @@ class ClientFeedback(BaseModel):
     blocked_domains: list[str] = Field(default_factory=list)
     blocked_addresses: list[str] = Field(default_factory=list)
     blocked_unverified_addresses: list[str] = Field(default_factory=list)
+    # value (domain or address, lowercase) -> the client's reason in words
+    # ("I ordered this"). Context only: it never changes what an entry is worth.
+    reasons: dict[str, str] = Field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:

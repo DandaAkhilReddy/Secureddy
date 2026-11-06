@@ -56,7 +56,7 @@ class TestThisIsSafe:
         row = await _message(db, message.id)
         assert row.state == "relabel_safe_requested" and row.verdict["client_decision"]["decision"] == "safe"
         page = client.get(f"/messages/{message.id}").text
-        assert "From now on, emails that Google confirms are from walmart.com will be marked Checked." in page
+        assert "Done. We marked it Checked. Next time walmart.com writes, we&#39;ll still check it and tell you if it&#39;s safe." in page
         assert "Its label changes to Checked within a minute" in page
         assert "sender_trusted" in await _actions(db)
 
@@ -72,7 +72,7 @@ class TestThisIsSafe:
         (entry,) = await _entries(db)
         assert (entry.scope, entry.value, entry.authenticated) == ("address", "office@smallshop.com", False)
         page = client.get(f"/messages/{message.id}").text
-        assert "Because it wasn&#39;t verified by Google, we&#39;ll still check its links." in page
+        assert "Because it wasn&#39;t verified by Google, we trust it only a little." in page
 
     async def test_old_verdict_without_field_uses_dmarc_signal(self, client, seed, login, csrf_of, make_verdict, db):
         user = await seed.user("owner@example.com")
@@ -218,7 +218,7 @@ class TestSenderList:
         login(client, "owner@example.com")
         page = client.get("/mailboxes").text
         assert "Trusted &amp; blocked senders" in page and "walmart.com" in page and "x@bad.example" in page
-        assert "Email that Google confirms is from walmart.com is marked Checked." in page
+        assert "Email that Google confirms is from walmart.com is marked Checked after we check it." in page
         assert "Goes to Quarantine unless Google confirms it is really them." in page
         assert 'aria-label="Remove walmart.com"' in page
         r = client.post(f"/mailboxes/{mailbox.id}/senders/sfb_1/remove", data={"csrf_token": csrf_of(client, "/mailboxes")})

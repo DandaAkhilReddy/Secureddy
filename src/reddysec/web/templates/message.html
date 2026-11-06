@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, csrf, signals, sender, icon, decide_forms with context %}
+{% from "_macros.html" import chip, csrf, signals, sender, icon, decide_forms, trust_badge with context %}
 {% block title %}{{ message.subject or "Email report" }} · Secureddy{% endblock %}
-{% block main_class %} has-mobile-bar{% endblock %}
+{% block main_class %} has-sheet{% endblock %}
 {% block content %}
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true">/</span><a href="/messages">Email</a><span aria-hidden="true">/</span><span>Report</span></nav>
 
@@ -17,6 +17,15 @@
     {% if report.override_note %}<p class="note">Analyst's note: {{ report.override_note }}</p>{% endif %}
   </div>
 </header>
+{% if report.trust %}
+<section class="trust-box trust-{{ report.trust.outcome }}" aria-labelledby="trust-title">
+  <span class="trust-icon" aria-hidden="true">{{ icon("shield-check" if report.trust.outcome == "confirmed" else ("warn" if report.trust.outcome == "changed" else "clock"), "ico") }}</span>
+  <div>
+    <h2 class="trust-title" id="trust-title">{{ report.trust.title }}</h2>
+    <p class="trust-text">{{ report.trust.text }}</p>
+  </div>
+</section>
+{% endif %}
 <dl class="mail-meta">
   <div><dt>Subject</dt><dd class="report-subject">{{ message.subject or "(no subject)" }}</dd></div>
   <div><dt>From</dt><dd>{{ sender(message) }}</dd></div>
@@ -25,10 +34,13 @@
 </dl>
 
 {# 4. What you can do (kept near the top: it is what the reader came for) #}
-<section class="card action-bar" id="decide" aria-labelledby="actions-title">
-  <h2 id="actions-title">What do you want to do?</h2>
+<section class="card action-bar action-sheet" id="decide" aria-labelledby="actions-title">
+  <div class="sheet-head">
+    <h2 id="actions-title">What do you want to do?</h2>
+    <a class="sheet-close" href="#_" aria-label="Close">{{ icon("x", "ico") }}</a>
+  </div>
   {% if report.can_mark_safe or report.can_mark_fake %}
-  {{ decide_forms(message.id, report.can_mark_safe, report.can_mark_fake, flagged=flagged) }}
+  {{ decide_forms(message.id, report.can_mark_safe, report.can_mark_fake, flagged=flagged, quarantined=message.quarantined) }}
   {% endif %}
   <div class="actions actions-wrap">
     <a class="btn btn-quiet" href="/assistant?about={{ message.id }}">{{ icon("chat") }}<span>Ask about this email</span></a>
@@ -52,9 +64,10 @@
     <button class="btn btn-quiet" type="submit">Ask the concierge to review</button>
   </form>
   {% if report.can_mark_safe or report.can_mark_fake %}
-  <p class="help">"Mark as safe" teaches us to trust this sender next time. "This is fake" sends their email to Quarantine from now on. You can undo either on the Mailboxes page.</p>
+  <p class="help">{{ '"Not fake?"' if message.quarantined else '"Mark as safe"' }} teaches us to trust this sender. We still check every email they send and tell you if one looks different. "This is fake" sends their email to Quarantine from now on. You can undo either on the Mailboxes page.</p>
   {% endif %}
 </section>
+<a class="sheet-backdrop" href="#_" aria-hidden="true" tabindex="-1"></a>
 
 {# 2. Why we think this #}
 {% if report.reasons or report.good_signs %}
@@ -195,10 +208,5 @@
   {% endfor %}
 </details>
 
-<nav class="mobile-bar" aria-label="Actions for this email">
-  {% if report.can_mark_safe or report.can_mark_fake %}
-  <a class="btn btn-primary btn-small" href="#decide">{{ icon("shield-check") }}<span>{{ "Not suspicious?" if flagged else "Decide" }}</span></a>
-  {% endif %}
-  <a class="btn btn-quiet btn-small" href="/assistant?about={{ message.id }}">{{ icon("chat") }}<span>Ask Secureddy</span></a>
-</nav>
+<a class="sheet-open{% if not flagged %} sheet-open-quiet{% endif %}" href="#decide">{{ icon("shield-check") }}<span>{{ ("Not fake?" if message.quarantined else "Not suspicious?") if flagged and report.can_mark_safe else "What do you want to do?" }}</span></a>
 {% endblock %}

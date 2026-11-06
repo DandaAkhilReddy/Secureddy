@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf, icon, provider_logo with context %}
+{% block title %}Connect your Yahoo Mail · Secureddy{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/mailboxes">Mailboxes</a><span aria-hidden="true">/</span><span>Yahoo Mail</span></nav>
+<header class="page-head page-head-logo">
+  {{ provider_logo("yahoo") }}
+  <div>
+    <h1>Connect your Yahoo Mail</h1>
+    <p class="lede">Yahoo lets us read your mail with an <strong>app password</strong>: a separate password just for Secureddy. It takes about a minute. Your normal Yahoo password stays with you.</p>
+  </div>
+</header>
+
+{% if error %}
+<div class="flash flash-error" role="alert">{{ error }}</div>
+{% endif %}
+
+<div class="two-col two-col-even">
+  <section class="card" aria-labelledby="steps-title">
+    <h2 id="steps-title">Three steps in Yahoo</h2>
+    <ol class="big-steps">
+      <li>
+        <span class="big-step-num" aria-hidden="true">1</span>
+        <div><strong>Open Yahoo Account Security.</strong>
+        <p>Sign in at <code>login.yahoo.com/account/security</code>.</p></div>
+      </li>
+      <li>
+        <span class="big-step-num" aria-hidden="true">2</span>
+        <div><strong>Choose Generate app password.</strong>
+        <p>It is near the bottom of the page. Name it <strong>Secureddy</strong>, then choose Generate password.</p></div>
+      </li>
+      <li>
+        <span class="big-step-num" aria-hidden="true">3</span>
+        <div><strong>Copy the password.</strong>
+        <p>Yahoo shows 16 letters once. Copy them and paste them here.</p></div>
+      </li>
+    </ol>
+  </section>
+
+  <form method="post" action="/mailboxes/connect-yahoo" class="card stack" aria-labelledby="paste-title">
+    <h2 id="paste-title">Paste it here</h2>
+    {{ csrf() }}
+    <label class="field">
+      <span>Yahoo email address</span>
+      <input class="input" type="email" name="address" value="{{ address }}" autocomplete="email" required>
+    </label>
+    <label class="field">
+      <span>App password</span>
+      <input class="input input-mono" type="password" name="app_password" autocomplete="off" spellcheck="false" placeholder="abcd efgh ijkl mnop" required>
+    </label>
+    <button class="btn btn-primary btn-block" type="submit">{{ icon("key") }}<span>Test connection</span></button>
+    <p class="help">We log in to Yahoo Mail once to check the password works ({{ host }}, port {{ port }}). If it does, your mailbox is connected and we start checking new email within a minute.</p>
+  </form>
+</div>
+{% endblock %}

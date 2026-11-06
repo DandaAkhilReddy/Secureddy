@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, csrf with context %}
+{% from "_macros.html" import chip, csrf, icon, connect_chooser, empty_art, provider_logo with context %}
 {% block title %}Mailboxes · Secureddy{% endblock %}
 {% block content %}
 <header class="page-head">
@@ -11,8 +11,9 @@
 <section class="stack-lg">
   {% for m in mailboxes %}
   <article class="card mailbox-card">
-    <div class="card-head">
-      <div>
+    <div class="card-head mailbox-head">
+      <span class="mailbox-logo">{{ provider_logo(PROVIDER_LOGOS.get(m.row.provider, "other")) }}</span>
+      <div class="mailbox-title">
         <h2>{{ m.row.address }}</h2>
         <p class="muted">{{ m.row.provider | provider }}{% if m.row.last_sync_at %} · last checked {{ m.row.last_sync_at | ago }}{% endif %}</p>
       </div>
@@ -63,11 +64,19 @@
       {% if m.senders %}
       <ul class="sender-list">
         {% for e in m.senders %}
-        <li class="sender-row">
-          <div>
-            <span class="chip tone-{{ 'ok' if e.trusted else 'bad' }}">{{ "Trusted" if e.trusted else "Blocked" }}</span>
-            <strong class="sender-value">{{ e.value }}</strong>
-            <span class="muted small block">{{ e.label }}</span>
+        <li class="sender-row{% if e.changed %} sender-changed{% endif %}">
+          <div class="sender-main">
+            <div class="sender-top">
+              <span class="chip tone-{{ 'ok' if e.trusted else 'bad' }}">{{ "Trusted" if e.trusted else "Blocked" }}</span>
+              <strong class="sender-value">{{ e.value }}</strong>
+            </div>
+            <p class="sender-label">{{ e.label }}</p>
+            {% if e.reason or e.since %}
+            <p class="sender-meta">{% if e.reason %}Your reason: <q>{{ e.reason }}</q>{% endif %}{% if e.reason and e.since %} &middot; {% endif %}{% if e.since %}Since {{ e.since }}{% endif %}</p>
+            {% endif %}
+            {% if e.checks %}
+            <p class="sender-checks{% if e.changed %} is-changed{% endif %}">{{ icon("warn" if e.changed else "shield-check", "ico ico-sm") }}<span>{{ e.checks }}</span></p>
+            {% endif %}
           </div>
           {% if m.owned %}
           <form method="post" action="/mailboxes/{{ m.row.id }}/senders/{{ e.id }}/remove">
@@ -79,7 +88,7 @@
         {% endfor %}
       </ul>
       {% else %}
-      <p class="muted small">None yet. On any email report, choose "This is safe" or "This is fake" and we will remember the sender.</p>
+      <p class="muted small">None yet. On any email report, choose "Not suspicious?", "Not fake?" or "This is fake" and we will remember the sender.</p>
       {% endif %}
       {% if m.owned and m.row.status != "disconnected" %}
       <form method="post" action="/mailboxes/{{ m.row.id }}/recheck" class="recheck-form">
@@ -94,18 +103,15 @@
 </section>
 {% else %}
 <section class="card empty">
+  {{ empty_art("inbox") }}
   <h2>No mailbox yet</h2>
-  <p class="muted">Connect one and we start checking new email within a minute.</p>
+  <p class="muted">Connect one below and we start checking new email within a minute.</p>
 </section>
 {% endif %}
 
-<section class="card">
-  <h2>Add a mailbox</h2>
-  <div class="actions actions-wrap">
-    {% if google_login_enabled %}
-    <a class="btn btn-primary" href="/auth/google/start?next=/mailboxes">Connect Gmail</a>
-    {% endif %}
-    <a class="btn btn-quiet" href="/mailboxes/add-imap">Add Yahoo, iCloud, Outlook.com or another mailbox</a>
-  </div>
+<section class="card" aria-labelledby="connect-title">
+  <h2 id="connect-title">{{ "Connect another mailbox" if mailboxes else "Connect a mailbox" }}</h2>
+  <p class="muted small">Pick where your email lives. You can connect more than one.</p>
+  {{ connect_chooser(google_login_enabled, microsoft_login_enabled) }}
 </section>
 {% endblock %}

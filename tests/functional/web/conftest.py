@@ -67,10 +67,12 @@ class FakeOAuthProvider:
         self.refresh_token = refresh_token
         self.fail_with: Exception | None = None
         self.started: list[AuthStart] = []
+        self.links: dict[str, str | None] = {}
         self.finished: list[tuple[str, str, str]] = []
 
-    def begin(self, return_to: str = "/") -> AuthStart:
+    def begin(self, return_to: str = "/", *, link: str | None = None) -> AuthStart:
         state = f"state-{len(self.started) + 1}-{new_id('st')[-6:]}"
+        self.links[state] = link
         start = AuthStart(
             url=f"https://accounts.google.example/o/oauth2/v2/auth?state={state}&rt={quote(return_to)}",
             state=state,
@@ -78,6 +80,9 @@ class FakeOAuthProvider:
         )
         self.started.append(start)
         return start
+
+    def link_of(self, state: str) -> str | None:
+        return self.links.get(state)
 
     async def finish(self, state: str, code: str, code_verifier: str) -> TokenSet:
         self.finished.append((state, code, code_verifier))

@@ -191,16 +191,19 @@ class GoogleOAuth:
             self._http = None
 
     # ------------------------------------------------------------------ begin
-    def begin(self, return_to: str = "/", *, login_hint: str | None = None) -> AuthStart:
+    def begin(self, return_to: str = "/", *, login_hint: str | None = None, link: str | None = None) -> AuthStart:
         """Build the consent URL. ``access_type=offline`` + ``prompt=consent``
         guarantee a refresh token even if the user consented before;
         ``include_granted_scopes`` keeps previously granted scopes when we add new ones."""
         verifier, challenge = pkce_pair()
-        payload = {
+        payload: dict[str, Any] = {
             "n": _b64url(os.urandom(16)),
             "r": _safe_return_to(return_to),
             "v": hashlib.sha256(verifier.encode("ascii")).hexdigest(),
         }
+        if link:
+            # "Connect another mailbox": the signed-in account that started the flow.
+            payload["l"] = link
         state = self._signer.dumps(payload)
         params = {
             "client_id": self.client_id,
@@ -236,6 +239,11 @@ class GoogleOAuth:
 
     def return_to(self, state: str, max_age_s: int = 600) -> str:
         return _safe_return_to(str(self.read_state(state, max_age_s)["r"]))
+
+    def link_of(self, state: str, max_age_s: int = 600) -> str | None:
+        """The account id a "Connect another mailbox" flow was started by, if any."""
+        link = self.read_state(state, max_age_s).get("l")
+        return str(link) if link else None
 
     # ----------------------------------------------------------------- finish
     async def finish(self, state: str, code: str, code_verifier: str, max_age_s: int = 600) -> TokenSet:

@@ -53,6 +53,23 @@ class Settings(BaseSettings):
     google_pubsub_topic: str = ""
     gmail_poll_seconds: int = 15
 
+    # --- Microsoft (Outlook.com, Hotmail, Microsoft 365) via Graph ---------
+    # The Entra app authenticates with a certificate, not a client secret
+    # (tenant policy): RS_MICROSOFT_CLIENT_CERT is the PEM bundle (private key
+    # + certificate) and RS_MICROSOFT_CERT_THUMBPRINT its SHA-1 thumbprint in
+    # hex. The button is shown only when the client id and certificate are set.
+    microsoft_client_id: str = ""
+    microsoft_client_cert: SecretStr = SecretStr("")
+    microsoft_cert_thumbprint: str = ""
+    microsoft_redirect_path: str = "/auth/microsoft/callback"
+    microsoft_authority: str = "https://login.microsoftonline.com/common"
+    graph_poll_seconds: int = 15
+
+    # --- Yahoo ("Sign in with Yahoo"; mail itself uses an app password) ----
+    yahoo_client_id: str = ""
+    yahoo_client_secret: SecretStr = SecretStr("")
+    yahoo_redirect_path: str = "/auth/yahoo/callback"
+
     # --- IMAP (Yahoo, iCloud, Outlook.com) -------------------------------
     imap_poll_seconds: int = 30
 
@@ -108,6 +125,22 @@ class Settings(BaseSettings):
     @property
     def google_redirect_uri(self) -> str:
         return self.base_url.rstrip("/") + self.google_redirect_path
+
+    @property
+    def microsoft_redirect_uri(self) -> str:
+        return self.base_url.rstrip("/") + self.microsoft_redirect_path
+
+    @property
+    def yahoo_redirect_uri(self) -> str:
+        return self.base_url.rstrip("/") + self.yahoo_redirect_path
+
+    @property
+    def microsoft_enabled(self) -> bool:
+        return bool(self.microsoft_client_id and self.microsoft_client_cert.get_secret_value())
+
+    @property
+    def yahoo_enabled(self) -> bool:
+        return bool(self.yahoo_client_id and self.yahoo_client_secret.get_secret_value())
 
     @property
     def effective_assistant_provider(self) -> str:

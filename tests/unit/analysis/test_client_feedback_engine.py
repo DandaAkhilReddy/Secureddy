@@ -42,13 +42,22 @@ def _weights(v):
     return out
 
 
-async def test_trusted_domain_takes_trusted_lane_and_is_checked():
+async def test_trusted_domain_takes_trusted_lane_is_rechecked_and_confirmed():
     det = FakeDetonator()
-    v = await analyze(_parsed(), _ctx(ClientFeedback(trusted_domains=["vendorsupplies.com"]), det))
+    feedback = ClientFeedback(trusted_domains=["vendorsupplies.com"], reasons={"vendorsupplies.com": "I ordered this"})
+    v = await analyze(_parsed(), _ctx(feedback, det))
     assert v.lane is TriageLane.TRUSTED and v.level is VerdictLevel.SAFE
     assert _weights(v)["history.client_trusted"] == -30
-    assert not det.jobs  # links on the trusted, verified domain itself need no sandbox
+    # Trust never skips the checks: the client asked us to re-check and confirm.
+    assert [j.url for j in det.jobs] == ["https://portal.vendorsupplies.com/invoices/7781"]
     assert v.verified_domain == "vendorsupplies.com"
+    assert v.trust_check is not None
+    assert (v.trust_check.trusted_by_client, v.trust_check.outcome, v.trust_check.reason) == (
+        True, "confirmed", "I ordered this"
+    )
+    assert (v.trust_check.scope, v.trust_check.value) == ("domain", "vendorsupplies.com")
+    assert v.summary == "You told us you trust this sender (reason: I ordered this). We checked this one too. It's safe."
+    assert "history.trust_confirmed" in _weights(v)
 
 
 async def test_trusted_domain_with_foreign_link_still_detonates_but_heuristics_off():
@@ -105,3 +114,43 @@ async def test_weak_address_trust_lowers_score_but_still_detonates():
 async def test_no_feedback_is_the_old_behaviour():
     v = await analyze(_parsed(), _ctx(None))
     assert "history.client_trusted" not in _weights(v) and "history.client_blocked" not in _weights(v)
+
+
+async def test_trusted_sender_that_changes_is_flagged_as_changed():
+    det = FakeDetonator()
+    det.script(
+        "https://portal.vendorsupplies.com/invoices/7781",
+        DetonationResult(
+            job_id="s", status=DetonationStatus.OK,
+            features=PageFeatures(
+                title="Microsoft 365 sign in", final_url="https://portal.vendorsupplies.com/login",
+                final_host="portal.vendorsupplies.com", has_password_field=True,
+                forms=[FormRecord(has_password=True, action_host="collector.evil.example")],
+                brand_keywords=["microsoft"], status_code=200,
+            ),
+        ),
+    )
+    v = await analyze(_parsed(), _ctx(ClientFeedback(trusted_domains=["vendorsupplies.com"]), det))
+    assert det.jobs, "a client-trusted sender's links are still opened"
+    assert v.level is not VerdictLevel.SAFE
+    assert v.trust_check is not None and v.trust_check.outcome == "changed" and v.trust_check.reason == ""
+    assert v.summary.startswith("This sender is on your trusted list, but this email looks different. ")
+    assert "history.trust_confirmed" not in _weights(v)
+
+
+async def test_trusted_address_check_and_known_correspondent():
+    from reddysec.analysis.pipeline import trust_check_for, trust_summary
+    from reddysec.analysis.trust import SenderTrust
+    from reddysec.models import TrustCheck
+
+    weak = SenderTrust(from_address="a@b.com", client_trust="address")
+    c = trust_check_for(weak, TriageLane.DETONATE, VerdictLevel.UNKNOWN, ClientFeedback(reasons={"a@b.com": "Friend"}))
+    assert (c.scope, c.value, c.outcome, c.reason) == ("address", "a@b.com", "incomplete", "Friend")
+    assert trust_summary(c, "orig") == "orig"
+    known = SenderTrust(from_address="x@y.com", aligned_domain="y.com")
+    c2 = trust_check_for(known, TriageLane.TRUSTED, VerdictLevel.SAFE, None)
+    assert c2.trusted_by_client is False and (c2.scope, c2.value) == ("domain", "y.com")
+    assert trust_check_for(known, TriageLane.DETONATE, VerdictLevel.SAFE, None) is None
+    assert trust_check_for(SenderTrust(client_blocked="domain"), TriageLane.BLOCK, VerdictLevel.MALICIOUS, None) is None
+    long = TrustCheck(trusted_by_client=True, reason="x" * 300, outcome="confirmed")
+    assert trust_summary(long, "s").endswith("…). We checked this one too. It's safe.")

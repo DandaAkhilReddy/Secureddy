@@ -69,7 +69,7 @@ class MailboxSecret(Base):
     __tablename__ = "mailbox_secrets"
 
     mailbox_id: Mapped[str] = mapped_column(String(40), ForeignKey("mailboxes.id"), primary_key=True)
-    kind: Mapped[str] = mapped_column(String(20))  # google_oauth | imap_password | yahoo_oauth
+    kind: Mapped[str] = mapped_column(String(20))  # google_oauth | microsoft_oauth | imap_password
     ciphertext: Mapped[str] = mapped_column(Text)
     key_id: Mapped[str] = mapped_column(String(20))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -164,6 +164,52 @@ class SenderFeedbackRow(Base):
     source_message_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserIdentityRow(Base):
+    """A sign-in identity (Google, Microsoft, Yahoo) attached to an account.
+
+    A separate table rather than new columns on ``users`` for the same
+    ``create_all`` reason as ``sender_feedback``. ``subject`` is the provider's
+    stable id for the person (Google ``sub``, Microsoft ``oid``, Yahoo
+    ``sub``). ``email_verified`` records whether the provider vouched for the
+    address; only verified identities may ever be matched to an existing
+    account by email (see web.queries.resolve_identity). ``tenant`` is the
+    Microsoft directory id (``tid``), empty for other providers.
+    """
+
+    __tablename__ = "user_identities"
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_user_identity_subject"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))  # google | microsoft | yahoo
+    subject: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), default="", index=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    tenant: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SenderTrustStatsRow(Base):
+    """How often we re-checked mail from a sender the client trusts, and how
+    the last check went. Updated by the worker; shown on the Mailboxes page as
+    "last confirmed 2 days ago · 5 emails checked since". Keyed like
+    ``sender_feedback`` (mailbox, scope, value) and reset when the client
+    trusts the sender again or removes the entry."""
+
+    __tablename__ = "sender_trust_stats"
+    __table_args__ = (UniqueConstraint("mailbox_id", "scope", "value", name="uq_sender_trust_stats_entry"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mailbox_id: Mapped[str] = mapped_column(String(40), ForeignKey("mailboxes.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(10))  # domain | address
+    value: Mapped[str] = mapped_column(String(320))
+    emails_checked: Mapped[int] = mapped_column(Integer, default=0)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_outcome: Mapped[str] = mapped_column(String(20), default="")  # confirmed | changed | incomplete
+    last_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ReadingRoomRow(Base):

@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import Depends, Form, HTTPException, Request, status
 from starlette.responses import RedirectResponse, Response
 
+from reddysec.mail.base import AuthExpired, ConnectorError
 from reddysec.store.models import UserRow
 
 from .. import presenters, queries
@@ -40,10 +41,17 @@ async def mailboxes_page(request: Request, user: UserRow = Depends(current_user)
     async with request.app.state.db.session() as session:
         mailboxes = await queries.list_mailboxes(session, user)
         entries = await queries.list_sender_feedback(session, [m.id for m in mailboxes])
+        reasons, stats = await queries.sender_entry_context(session, entries)
     settings = request.app.state.settings
     by_mailbox: dict[str, list] = {}
-    for entry in entries:
-        by_mailbox.setdefault(entry.mailbox_id, []).append(presenters.sender_entry(entry))
+    for entry in sorted(entries, key=lambda e: (e.decision != "trusted", e.value)):
+        by_mailbox.setdefault(entry.mailbox_id, []).append(
+            presenters.sender_entry(
+                entry,
+                reason=reasons.get(entry.id),
+                stats=stats.get((entry.mailbox_id, entry.scope, entry.value.lower())),
+            )
+        )
     return render(
         request,
         "mailboxes.html",
@@ -65,19 +73,37 @@ async def mailboxes_page(request: Request, user: UserRow = Depends(current_user)
 
 
 def _add_imap_page(
-    request: Request, *, error: str | None = None, form: dict | None = None, status_code: int = 200
+    request: Request,
+    *,
+    error: str | None = None,
+    form: dict | None = None,
+    status_code: int = 200,
+    suggest_microsoft: bool = False,
 ) -> Response:
     return render(
         request,
         "mailbox_add_imap.html",
-        {"providers": list(presenters.IMAP_PROVIDERS.values()), "error": error, "form": form or {}},
+        {
+            "providers": list(presenters.IMAP_PROVIDERS.values()),
+            "error": error,
+            "form": form or {},
+            "suggest_microsoft": suggest_microsoft,
+            "provider_domains": presenters.PROVIDER_DOMAINS,
+        },
         status_code=status_code,
     )
 
 
 @router.get("/mailboxes/add-imap", name="add_imap")
-async def add_imap_page(request: Request, user: UserRow = Depends(current_user)) -> Response:
-    return _add_imap_page(request, form={"provider": "yahoo", "port": "993"})
+async def add_imap_page(
+    request: Request, address: str = "", provider: str = "", user: UserRow = Depends(current_user)
+) -> Response:
+    detected = presenters.detect_provider(address)
+    chosen = provider if provider in presenters.IMAP_PROVIDERS else detected or "yahoo"
+    if chosen == "outlook" and detected == "outlook" and request.app.state.microsoft_oauth is not None:
+        return _add_imap_page(request, form={"provider": "outlook", "address": address, "port": "993"},
+                              suggest_microsoft=True)
+    return _add_imap_page(request, form={"provider": chosen, "address": address.strip().lower(), "port": "993"})
 
 
 @router.post("/mailboxes/add-imap", name="add_imap_submit")
@@ -88,6 +114,7 @@ async def add_imap_submit(
     app_password: str = Form(""),
     host: str = Form(""),
     port: str = Form("993"),
+    use_imap: str = Form(""),
     user: UserRow = Depends(current_user),
 ) -> Response:
     form = {"provider": provider, "address": address, "host": host, "port": port}
@@ -99,9 +126,19 @@ async def add_imap_submit(
         return _add_imap_page(
             request, error="Please enter the full email address.", form=form, status_code=400
         )
+    # The address tells us the provider better than the dropdown does.
+    detected = presenters.detect_provider(address)
+    if detected == "outlook" and request.app.state.microsoft_oauth is not None and not use_imap:
+        return _add_imap_page(request, form={**form, "provider": "outlook"}, suggest_microsoft=True)
+    if detected in ("yahoo", "icloud") and provider != "imap" and provider != detected:
+        provider = detected
+        spec = presenters.IMAP_PROVIDERS[detected]
+        form["provider"] = detected
     if not app_password.strip():
         return _add_imap_page(request, error="Please paste the app password.", form=form, status_code=400)
     imap_host = spec.host or host.strip().lower()
+    if provider == "yahoo" and address.endswith("@aol.com"):
+        imap_host = presenters.AOL_IMAP_HOST  # AOL runs on Yahoo's platform with its own IMAP name
     if not imap_host or " " in imap_host or "/" in imap_host:
         return _add_imap_page(request, error="Please enter the IMAP server name.", form=form, status_code=400)
     try:
@@ -130,6 +167,72 @@ async def add_imap_submit(
             password=app_password.strip(),
         )
     flash(request, f"{spec.label} is connected. We start checking new email within a minute.")
+    return _see_other()
+
+
+# ---------------------------------------------------------------- Yahoo Mail
+
+YAHOO_BAD_PASSWORD = (
+    "Yahoo did not accept that app password. Copy it again from Yahoo (16 letters) and paste it here. "
+    "Your normal Yahoo password will not work here."
+)
+YAHOO_UNREACHABLE = "We could not reach Yahoo Mail just now. Please try again in a minute."
+
+
+def _connect_yahoo_page(
+    request: Request, *, address: str = "", error: str | None = None, status_code: int = 200
+) -> Response:
+    spec = presenters.IMAP_PROVIDERS["yahoo"]
+    return render(
+        request,
+        "mailbox_connect_yahoo.html",
+        {"address": address, "error": error, "host": spec.host, "port": spec.port},
+        status_code=status_code,
+    )
+
+
+@router.get("/mailboxes/connect-yahoo", name="connect_yahoo")
+async def connect_yahoo_page(request: Request, address: str = "", user: UserRow = Depends(current_user)) -> Response:
+    """The step after "Sign in with Yahoo" (or the Yahoo tile): three steps to
+    create an app password, one field to paste it, and a real test."""
+    if not address and presenters.detect_provider(user.login_email) == "yahoo":
+        address = user.login_email
+    return _connect_yahoo_page(request, address=address.strip().lower())
+
+
+@router.post("/mailboxes/connect-yahoo", name="connect_yahoo_submit")
+async def connect_yahoo_submit(
+    request: Request,
+    address: str = Form(""),
+    app_password: str = Form(""),
+    user: UserRow = Depends(current_user),
+) -> Response:
+    address = address.strip().lower()
+    # Yahoo shows the password in groups of four; people paste it with spaces.
+    password = "".join(app_password.split())
+    if "@" not in address or " " in address:
+        return _connect_yahoo_page(request, address=address, error="Please enter your full Yahoo email address.",
+                                   status_code=400)
+    if not password:
+        return _connect_yahoo_page(request, address=address, error="Please paste the app password.", status_code=400)
+    spec = presenters.IMAP_PROVIDERS["yahoo"]
+    host = presenters.AOL_IMAP_HOST if address.endswith("@aol.com") else spec.host
+    try:
+        await request.app.state.imap_tester(host, spec.port, address, password)
+    except AuthExpired:
+        return _connect_yahoo_page(request, address=address, error=YAHOO_BAD_PASSWORD, status_code=400)
+    except (ConnectorError, OSError):
+        return _connect_yahoo_page(request, address=address, error=YAHOO_UNREACHABLE, status_code=502)
+    async with request.app.state.db.session() as session:
+        existing = await queries.list_mailboxes(session, user)
+        if any(m.address == address and m.status != "disconnected" for m in existing):
+            return _connect_yahoo_page(request, address=address, error="That mailbox is already connected.",
+                                       status_code=400)
+        await queries.add_imap_mailbox(
+            session, request.app.state.cipher, user, provider="yahoo", address=address, host=host,
+            port=spec.port, password=password,
+        )
+    flash(request, "Connected. Yahoo accepted the app password, and we start checking new email within a minute.")
     return _see_other()
 
 

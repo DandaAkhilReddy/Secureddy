@@ -16,10 +16,22 @@ from reddysec.web.templating import package_path
 TOKEN_RE = re.compile(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;")
 
 
-def tokens() -> dict[str, str]:
+def tokens(theme: str = "dark") -> dict[str, str]:
     css = package_path("static").joinpath("app.css").read_text()
     root = css.split(":root {", 1)[1].split("}", 1)[0]
-    return dict(TOKEN_RE.findall(root))
+    base = dict(TOKEN_RE.findall(root))
+    if theme == "dark":
+        return base
+    light = css.split(':root[data-theme="light"] {', 1)[1].split("}", 1)[0]
+    return {**base, **dict(TOKEN_RE.findall(light))}
+
+
+def light_blocks_match() -> bool:
+    """The "match my device" copy of the light tokens equals the explicit one."""
+    css = package_path("static").joinpath("app.css").read_text()
+    explicit = css.split(':root[data-theme="light"] {', 1)[1].split("}", 1)[0]
+    media = css.split(':root:not([data-theme="dark"]) {', 1)[1].split("}", 1)[0]
+    return dict(TOKEN_RE.findall(explicit)) == dict(TOKEN_RE.findall(media))
 
 
 def luminance(hex_colour: str) -> float:
@@ -56,12 +68,17 @@ PAIRS = {
 }
 
 
+@pytest.mark.parametrize("theme", ["dark", "light"])
 @pytest.mark.parametrize("name", sorted(PAIRS))
-def test_aa_contrast(name):
-    t = tokens()
+def test_aa_contrast(name, theme):
+    t = tokens(theme)
     fg, bg = PAIRS[name]
     ratio = contrast(t[fg], t[bg])
-    assert ratio >= 4.5, f"{name}: {ratio:.2f}:1"
+    assert ratio >= 4.5, f"{theme} {name}: {ratio:.2f}:1"
+
+
+def test_light_theme_copies_agree():
+    assert light_blocks_match()
 
 
 def test_contrast_helper_is_right():

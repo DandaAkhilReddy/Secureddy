@@ -63,6 +63,10 @@ KEYWORD_SUSPICIOUS = "$ReddySuspicious"
 KEYWORD_RELEASED = "$ReddyReleased"
 RECENT_LIMIT = 50
 
+# Yahoo Mail over OAuth (XOAUTH2) needs Yahoo's commercial Mail API approval.
+# When it is granted, store {"username", "oauth_access_token"} with vault kind
+# ``imap_oauth`` and ``_authenticate`` below already uses XOAUTH2 instead of
+# the app password (see mail.oauth_yahoo for the rest of the switch).
 IMAP_PRESETS: dict[Provider, tuple[str, int]] = {
     Provider.YAHOO: ("imap.mail.yahoo.com", 993),
     Provider.ICLOUD: ("imap.mail.me.com", 993),
@@ -548,6 +552,13 @@ class ImapConnector:
         except Exception as exc:  # noqa: BLE001 - a lookup failure must not mask the IMAP error
             log.warning("imap.resolver_failed", mailbox_id=self.mailbox_id, error=str(exc))
             return None
+
+    async def check_login(self) -> int:
+        """"Test connection": log in, open the inbox, log out. Returns the
+        number of messages in the inbox. Raises ``AuthExpired`` when the
+        server refuses the password and ``ConnectorError`` when it cannot be
+        reached. Nothing in the mailbox is changed."""
+        return await self._run(lambda sess: sess.select(INBOX).exists)
 
     # ------------------------------------------------------ MailboxConnector
     async def setup(self, mode: ProtectionMode) -> dict[str, str]:

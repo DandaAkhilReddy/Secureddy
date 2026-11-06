@@ -6,7 +6,11 @@
   <h1>{{ title }}</h1>
   <p class="lede">{{ message }}</p>
   <div class="actions">
+    {% if cta_href is defined and cta_href %}
+    <a class="btn btn-primary" href="{{ cta_href }}">{{ cta_label }}</a>
+    {% else %}
     <a class="btn btn-primary" href="/">{{ "Back to home" if user else "Go to sign in" }}</a>
+    {% endif %}
   </div>
 </section>
 {% endblock %}

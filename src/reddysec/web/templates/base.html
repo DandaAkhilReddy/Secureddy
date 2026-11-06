@@ -1,27 +1,44 @@
 <!doctype html>
-{% from "_macros.html" import icon %}
-<html lang="en">
+{% from "_macros.html" import icon, brand_mark %}
+<html lang="en"{% if theme != "system" %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="{{ 'dark' if theme == 'dark' else ('light' if theme == 'light' else 'dark light') }}">
   <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Secureddy checks every link and file in your email on our servers before it reaches you.">
+  {% if theme == "light" %}
+  <meta name="theme-color" content="#f6f1e7">
+  {% elif theme == "dark" %}
+  <meta name="theme-color" content="#0e1318">
+  {% else %}
+  <meta name="theme-color" content="#0e1318" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)">
+  {% endif %}
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Secureddy">
   <title>{% block title %}Secureddy{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
 </head>
-<body class="{% block body_class %}{% endblock %}">
+<body class="{% block body_class %}{% endblock %}{% if user %} has-tabbar{% endif %}">
 <a class="skip-link" href="#main">Skip to content</a>
 {% if user %}
 <div class="shell">
   <aside class="nav" aria-label="Main navigation">
     <div class="nav-top">
-      <a class="brand" href="/">Secu<span>reddy</span></a>
+      <a class="brand" href="/">{{ brand_mark("brand-mark") }}<span class="brand-word">Secu<span>reddy</span></span></a>
       <input type="checkbox" id="nav-toggle" class="nav-toggle sr-only">
       <label for="nav-toggle" class="nav-toggle-btn"><span class="nav-burger" aria-hidden="true"></span><span>Menu</span></label>
       <nav class="nav-links">
         <ul>
           {% for href, label in nav_items %}
-          <li>
+          <li class="{{ 'nav-tabbed' if href in ('/', '/messages', '/assistant', '/mailboxes') else '' }}">
             <a href="{{ href }}"{% if current_path == href or (href != '/' and current_path.startswith(href)) %} aria-current="page"{% endif %}>{{ icon(NAV_ICONS.get(href, "dot"), "nav-ico") }}<span>{{ label }}</span></a>
           </li>
           {% endfor %}
@@ -31,10 +48,13 @@
             <strong>{{ user.display_name }}</strong>
             <span>{{ user.login_email }}</span>
           </div>
-          <form method="post" action="/auth/logout">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="btn btn-quiet btn-small" type="submit">Sign out</button>
-          </form>
+          <div class="nav-foot-actions">
+            <button class="btn btn-quiet btn-small install-btn" type="button" data-install hidden>{{ icon("download") }}<span>Install Secureddy</span></button>
+            <form method="post" action="/auth/logout">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn btn-quiet btn-small" type="submit">Sign out</button>
+            </form>
+          </div>
         </div>
       </nav>
     </div>
@@ -51,12 +71,24 @@
       {% endfor %}
     </div>
     {% endif %}
+    {% if user %}
+    <div class="ios-hint" data-ios-hint hidden>
+      {{ icon("download", "ico") }}
+      <p>Install Secureddy: tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</p>
+      <button type="button" class="flash-close" data-ios-hint-close aria-label="Dismiss">&times;</button>
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 {% if user %}
 </div>
+<nav class="tabbar" aria-label="Main sections">
+  {% for href, label, ico in tab_items %}
+  <a class="tab-link" href="{{ href }}"{% if current_path == href or (href != '/' and current_path.startswith(href)) %} aria-current="page"{% endif %}>{{ icon(ico, "tab-ico") }}<span>{{ label }}</span></a>
+  {% endfor %}
+</nav>
 {% endif %}
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v={{ asset_version }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

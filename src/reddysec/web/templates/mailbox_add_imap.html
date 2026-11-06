@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% from "_macros.html" import csrf with context %}
+{% from "_macros.html" import csrf, icon, provider_logo with context %}
 {% block title %}Add a mailbox · Secureddy{% endblock %}
 {% block content %}
-<nav class="crumbs" aria-label="Breadcrumb"><a href="/mailboxes">Mailboxes</a><span>/</span><span>Add a mailbox</span></nav>
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/mailboxes">Mailboxes</a><span aria-hidden="true">/</span><span>Add a mailbox</span></nav>
 <header class="page-head">
   <h1>Add a mailbox</h1>
   <p class="lede">Yahoo, iCloud and Outlook.com give out an <strong>app password</strong>: a separate password just for us. Your real password stays with you, and you can revoke ours at any time from your provider.</p>
@@ -12,9 +12,36 @@
 <div class="flash flash-error" role="alert">{{ error }}</div>
 {% endif %}
 
+{% if suggest_microsoft %}
+<section class="card suggest-card" aria-labelledby="ms-title">
+  <div class="suggest-head">{{ provider_logo("microsoft") }}<h2 id="ms-title">Use Sign in with Microsoft instead</h2></div>
+  <p>{{ form.get("address") or "This address" }} is an Outlook.com address. Signing in with Microsoft is easier and safer than an app password: no password to copy, and Hold mode works without setting up a rule yourself.</p>
+  <div class="actions actions-wrap">
+    <form method="post" action="/auth/microsoft/link">
+      {{ csrf() }}<input type="hidden" name="next" value="/mailboxes">
+      <button class="pbtn pbtn-microsoft" type="submit">{{ provider_logo("microsoft") }}<span>Sign in with Microsoft</span></button>
+    </form>
+  </div>
+  <details class="suggest-imap">
+    <summary>Use an app password anyway</summary>
+    <form method="post" action="/mailboxes/add-imap" class="stack">
+      {{ csrf() }}
+      <input type="hidden" name="provider" value="outlook">
+      <input type="hidden" name="use_imap" value="1">
+      <label class="field"><span>Email address</span><input class="input" type="email" name="address" value="{{ form.get("address", "") }}" autocomplete="email" required></label>
+      <label class="field"><span>App password</span><input class="input" type="password" name="app_password" autocomplete="off" required></label>
+      <button class="btn btn-quiet" type="submit">Connect with an app password</button>
+    </form>
+  </details>
+</section>
+{% else %}
 <div class="two-col">
   <form method="post" action="/mailboxes/add-imap" class="card stack" id="imap-form">
     {{ csrf() }}
+    <label class="field">
+      <span>Email address</span>
+      <input class="input" type="email" name="address" id="imap-address" value="{{ form.get("address", "") }}" autocomplete="email" required>
+    </label>
     <label class="field">
       <span>Mail provider</span>
       <select class="input" name="provider" id="imap-provider">
@@ -22,10 +49,7 @@
         <option value="{{ p.key }}" data-host="{{ p.host }}" data-port="{{ p.port }}"{% if form.get("provider") == p.key %} selected{% endif %}>{{ p.label }}</option>
         {% endfor %}
       </select>
-    </label>
-    <label class="field">
-      <span>Email address</span>
-      <input class="input" type="email" name="address" value="{{ form.get("address", "") }}" autocomplete="email" required>
+      <span class="help" id="imap-detected" hidden>We picked this from your address.</span>
     </label>
     <label class="field">
       <span>App password</span>
@@ -57,4 +81,6 @@
     {% endfor %}
   </aside>
 </div>
+<script type="application/json" id="provider-domains">{{ provider_domains | tojson }}</script>
+{% endif %}
 {% endblock %}

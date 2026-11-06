@@ -60,7 +60,9 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         "get_message_report",
-        "The full report for one email: verdict, plain reasons, what we checked, links, files and the person's own feedback.",
+        "The full report for one email: verdict, plain reasons, what we checked, links, files, the person's own "
+        "feedback, and trust_check (for a sender they trust: 'confirmed' = checked again and safe, 'changed' = "
+        "trusted sender but this email looks different).",
         {"type": "object", "properties": {"message_id": _MESSAGE_ID}, "required": ["message_id"]},
     ),
     ToolSpec(
@@ -188,6 +190,7 @@ class ToolBox:
             "received_ago": presenters.humanize_ago(message.received_at, self.now),
             "verdict": presenters.verdict_chip(message).label,
             "reason": reason or presenters.list_reason(message),
+            "trusted_sender_check": presenters.trust_outcome(message) or None,
             "email": untrusted(from_name=message.from_name, from_address=message.from_address, subject=message.subject),
         }
 
@@ -253,6 +256,7 @@ class ToolBox:
             "mailbox": mailbox.address,
             "email": untrusted(from_name=message.from_name, from_address=message.from_address, subject=message.subject),
             "sender_verified_by_google": report.verified_domain or None,
+            "trust_check": _trust_check(message),
             "reasons": [{"title": r.title, "meaning": r.meaning, "what_to_do": r.todo, "severity": r.tone}
                         for r in report.reasons[:10]],
             "good_signs": [{"title": g.title, "meaning": g.meaning} for g in report.good_signs[:6]],
@@ -365,6 +369,20 @@ class ToolBox:
             }),
             proposal,
         )
+
+
+def _trust_check(message: MessageRow) -> dict[str, Any] | None:
+    """What the re-check of a trusted sender found: "confirmed" (checked again,
+    safe) or "changed" (the sender is trusted but this email looks different)."""
+    raw = message.verdict if isinstance(message.verdict, dict) else {}
+    check = raw.get("trust_check")
+    if not isinstance(check, dict):
+        return None
+    return {
+        "trusted_by_client": bool(check.get("trusted_by_client")),
+        "outcome": check.get("outcome"),
+        **untrusted(reason=check.get("reason") or "", sender=check.get("value") or ""),
+    }
 
 
 def _known(arguments: dict[str, Any], handler: Any) -> dict[str, Any]:

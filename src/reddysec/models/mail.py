@@ -14,10 +14,13 @@ class Provider(str, Enum):
     ICLOUD = "icloud"
     OUTLOOK = "outlook"  # consumer Outlook.com / Hotmail via IMAP
     GENERIC_IMAP = "imap"
+    # Outlook.com, Hotmail and Microsoft 365 through "Sign in with Microsoft"
+    # and the Microsoft Graph API (mail.outlook_graph). OUTLOOK stays the IMAP path.
+    MICROSOFT = "microsoft"
 
     @property
     def uses_imap(self) -> bool:
-        return self is not Provider.GMAIL
+        return self not in (Provider.GMAIL, Provider.MICROSOFT)
 
 
 class ProtectionMode(str, Enum):

@@ -41,6 +41,18 @@ from reddysec.analysis.urls import registrable_domain
 from reddysec.core.crypto import DecryptError, TokenCipher
 from reddysec.core.ids import new_id
 from reddysec.models import MALICIOUS_THRESHOLD, SUSPICIOUS_THRESHOLD, Role
+
+# Quick-pick reasons on "Not suspicious?" / "Not fake?" / "This is fake" live in
+# models.reasons; re-exported here for the web layer. A reason is recorded and
+# shown; it never changes what the sender is trusted for.
+from reddysec.models.reasons import (  # noqa: F401 - re-exported
+    ASSISTANT_REASON,
+    FAKE_REASONS,
+    NOT_FAKE_REASONS,
+    SAFE_REASONS,
+    allowed_codes,
+)
+from reddysec.models.reasons import reason_label as _reason_label
 from reddysec.store.models import (
     AuditLog,
     FeedbackReasonRow,
@@ -49,6 +61,8 @@ from reddysec.store.models import (
     MessageRow,
     NotificationRow,
     SenderFeedbackRow,
+    SenderTrustStatsRow,
+    UserIdentityRow,
     UserRow,
 )
 from reddysec.store.repo import (
@@ -58,7 +72,7 @@ from reddysec.store.repo import (
 )
 
 STAFF_ROLES = frozenset({Role.CONCIERGE.value, Role.ADMIN.value})
-SECRET_KINDS = frozenset({"google_oauth", "imap_password"})
+SECRET_KINDS = frozenset({"google_oauth", "microsoft_oauth", "imap_password"})
 STATE_RESTORE_REQUESTED = "restore_requested"
 STATE_REVIEWED = "reviewed"
 ANALYZED_STATES = ("done", STATE_REVIEWED, STATE_RESTORE_REQUESTED, "released_by_deadman")
@@ -72,23 +86,6 @@ PAGE_SIZE = 50
 RECHECK_DAYS = 7
 RECHECK_LIMIT = 200
 REASON_TEXT_MAX = 500
-
-# Quick-pick reasons on "Not suspicious?" / "This is fake". The reason is
-# recorded and shown; it never changes what the sender is trusted for.
-SAFE_REASONS: dict[str, str] = {
-    "known_sender": "I know this sender",
-    "expected": "I ordered this / expected it",
-    "newsletter": "It's a newsletter I signed up for",
-    "other": "Other",
-}
-FAKE_REASONS: dict[str, str] = {
-    "unknown_sender": "I don't know this sender",
-    "money_or_codes": "Asks for money or codes",
-    "impersonation": "Pretends to be someone",
-    "other": "Other",
-}
-# Set by the assistant's proposal cards, never offered as a radio button.
-ASSISTANT_REASON = ("assistant", "Agreed with the assistant's suggestion")
 
 # Representative scores for an analyst override so the stored score always
 # agrees with the stored level.
@@ -207,21 +204,178 @@ async def get_or_create_user(
     return user, True
 
 
+class IdentityConflict(Exception):
+    """A sign-in identity cannot be attached to an account.
+
+    ``reason`` is ``email_taken`` (an account with this email exists, and the
+    provider did not vouch for the email, so we will not hand that account
+    over) or ``other_account`` (the identity already belongs to someone else).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+async def get_identity(session: AsyncSession, provider: str, subject: str) -> UserIdentityRow | None:
+    result = await session.execute(
+        select(UserIdentityRow).where(UserIdentityRow.provider == provider, UserIdentityRow.subject == subject)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_identities(session: AsyncSession, user_id: str) -> list[UserIdentityRow]:
+    result = await session.execute(
+        select(UserIdentityRow).where(UserIdentityRow.user_id == user_id).order_by(UserIdentityRow.created_at)
+    )
+    return list(result.scalars())
+
+
+async def _add_identity(
+    session: AsyncSession,
+    user: UserRow,
+    *,
+    provider: str,
+    subject: str,
+    email: str,
+    email_verified: bool,
+    tenant: str = "",
+) -> UserIdentityRow:
+    row = UserIdentityRow(
+        id=new_id("uid"),
+        user_id=user.id,
+        provider=provider,
+        subject=subject,
+        email=normalize_email(email),
+        email_verified=email_verified,
+        tenant=tenant,
+        created_at=utcnow(),
+        last_login_at=utcnow(),
+    )
+    session.add(row)
+    if provider == "google" and not user.google_sub:
+        user.google_sub = subject  # keep the legacy column working
+    await session.flush()
+    return row
+
+
+async def account_email_is_trusted(session: AsyncSession, user: UserRow) -> bool:
+    """May a *verified* sign-in with this account's email be attached to it?
+
+    Yes for accounts set up by us (no identities: pre-provisioned, password),
+    for Google accounts (Google verified the email) and for any account with a
+    verified identity. No for an account that only ever signed in with
+    identities whose email nobody vouched for: otherwise someone could create
+    an account in a client's name with an unverified Microsoft email and wait
+    for the real client to sign in with Google ("pre-account takeover").
+    """
+    if user.google_sub or user.password_hash:
+        return True
+    identities = await list_identities(session, user.id)
+    return not identities or any(i.email_verified for i in identities)
+
+
+async def resolve_identity(
+    session: AsyncSession,
+    *,
+    provider: str,
+    subject: str,
+    email: str,
+    email_verified: bool,
+    name: str | None = None,
+    tenant: str = "",
+    personal_tenant: str = "",
+) -> tuple[UserRow, bool]:
+    """The account a sign-in belongs to: ``(user, created)``.
+
+    1. The identity is already known: that account.
+    2. Google only: the legacy ``users.google_sub`` column.
+    3. An account with the same email exists. It is used only when the email
+       is verified by the provider (and the account itself is trustworthy, see
+       :func:`account_email_is_trusted`), or, for Microsoft work accounts, when
+       the account already has a Microsoft identity in the same directory
+       (tenant). Otherwise :class:`IdentityConflict` (``email_taken``): the
+       person must sign in the way they did before and connect this mailbox
+       from the Mailboxes page. Never link by email alone.
+    4. No account with that email: create one.
+    """
+    email = normalize_email(email)
+    known = await get_identity(session, provider, subject)
+    if known is not None:
+        user = await session.get(UserRow, known.user_id)
+        if user is not None:
+            known.last_login_at = utcnow()
+            if email:
+                known.email = email
+            return user, False
+    if provider == "google":
+        result = await session.execute(select(UserRow).where(UserRow.google_sub == subject))
+        legacy = result.scalar_one_or_none()
+        if legacy is not None:
+            await _add_identity(session, legacy, provider=provider, subject=subject, email=email,
+                                email_verified=email_verified, tenant=tenant)
+            return legacy, False
+    if not email:
+        raise IdentityConflict("no_email")
+    existing = await get_user_by_email(session, email)
+    if existing is not None:
+        allowed = email_verified and await account_email_is_trusted(session, existing)
+        if not allowed and provider == "microsoft" and tenant and tenant != personal_tenant:
+            same_tenant = [
+                i for i in await list_identities(session, existing.id)
+                if i.provider == "microsoft" and i.tenant == tenant
+            ]
+            allowed = bool(same_tenant)
+        if not allowed:
+            raise IdentityConflict("email_taken")
+        await _add_identity(session, existing, provider=provider, subject=subject, email=email,
+                            email_verified=email_verified, tenant=tenant)
+        return existing, False
+    user, _ = await get_or_create_user(session, email=email, display_name=name)
+    if name:
+        user.display_name = name.strip()[:200] or user.display_name
+    await _add_identity(session, user, provider=provider, subject=subject, email=email,
+                        email_verified=email_verified, tenant=tenant)
+    return user, True
+
+
+async def link_identity(
+    session: AsyncSession,
+    user: UserRow,
+    *,
+    provider: str,
+    subject: str,
+    email: str,
+    email_verified: bool,
+    tenant: str = "",
+) -> UserIdentityRow:
+    """"Connect another mailbox": attach an identity to the account that is
+    signed in *and* started the flow (the web layer checks both). Linking is
+    by the signed-in session, never by email."""
+    known = await get_identity(session, provider, subject)
+    if known is not None:
+        if known.user_id != user.id:
+            raise IdentityConflict("other_account")
+        known.last_login_at = utcnow()
+        return known
+    if provider == "google":
+        result = await session.execute(select(UserRow).where(UserRow.google_sub == subject))
+        legacy = result.scalar_one_or_none()
+        if legacy is not None and legacy.id != user.id:
+            raise IdentityConflict("other_account")
+    return await _add_identity(session, user, provider=provider, subject=subject, email=email,
+                               email_verified=email_verified, tenant=tenant)
+
+
 async def upsert_google_user(
     session: AsyncSession, *, sub: str, email: str, name: str | None
 ) -> tuple[UserRow, bool]:
-    """Find by Google subject first (stable even if the client renames their
-    address), then by email (links a pre-provisioned account), else create."""
-    result = await session.execute(select(UserRow).where(UserRow.google_sub == sub))
-    user = result.scalar_one_or_none()
-    if user is not None:
-        return user, False
-    user, created = await get_or_create_user(session, email=email, display_name=name)
-    user.google_sub = sub
-    if name and created:
-        user.display_name = name[:200]
-    await session.flush()
-    return user, created
+    """Google sign-in: Google has verified the email (the callback refuses
+    unverified ones), so an existing account with that email is linked unless
+    that account only ever signed in with unverified identities."""
+    return await resolve_identity(
+        session, provider="google", subject=sub, email=email, email_verified=True, name=name
+    )
 
 
 async def staff_users(session: AsyncSession) -> list[UserRow]:
@@ -293,16 +447,25 @@ async def _replace_secret(
     write_mailbox_secret(session, cipher, mailbox_id, kind, secret)
 
 
-async def connect_gmail_mailbox(
-    session: AsyncSession, cipher: TokenCipher, user: UserRow, address: str, token_payload: dict[str, Any]
+async def connect_oauth_mailbox(
+    session: AsyncSession,
+    cipher: TokenCipher,
+    user: UserRow,
+    address: str,
+    token_payload: dict[str, Any],
+    *,
+    provider: str = "gmail",
+    kind: str = "google_oauth",
 ) -> MailboxRow:
-    """Create or re-activate the Gmail mailbox for ``address`` and store the
-    OAuth tokens. Google returns a refresh token only on first consent, so a
-    re-connect without one keeps the previously stored refresh token."""
+    """Create or re-activate an OAuth mailbox (Gmail or Microsoft) for
+    ``address`` and store its tokens. Providers return a refresh token only on
+    first consent (Google) or may omit it, so a re-connect without one keeps
+    the previously stored refresh token. ``labels`` stays ``{}`` on a new
+    mailbox so the worker runs ``setup`` on its next cycle."""
     address = normalize_email(address)
     result = await session.execute(
         select(MailboxRow).where(
-            MailboxRow.user_id == user.id, MailboxRow.provider == "gmail", MailboxRow.address == address
+            MailboxRow.user_id == user.id, MailboxRow.provider == provider, MailboxRow.address == address
         )
     )
     mailbox = result.scalar_one_or_none()
@@ -311,7 +474,7 @@ async def connect_gmail_mailbox(
         mailbox = MailboxRow(
             id=new_id("mbx"),
             user_id=user.id,
-            provider="gmail",
+            provider=provider,
             address=address,
             mode="scan",
             status="active",
@@ -325,18 +488,34 @@ async def connect_gmail_mailbox(
         existing = await read_mailbox_secret(session, cipher, mailbox.id)
         if not token_payload.get("refresh_token") and existing and existing.get("refresh_token"):
             token_payload = {**token_payload, "refresh_token": existing["refresh_token"]}
+        if mailbox.status == "disconnected":
+            mailbox.labels = {}  # set the mailbox up again from scratch
         mailbox.status = "active"
         mailbox.last_error = None
-    await _replace_secret(session, cipher, mailbox.id, "google_oauth", token_payload)
+    await _replace_secret(session, cipher, mailbox.id, kind, token_payload)
     audit(
         session,
         actor=user,
         action="mailbox_connected",
         mailbox_id=mailbox.id,
         target=address,
-        details={"provider": "gmail", "created": created, "scopes": token_payload.get("scopes", [])},
+        details={"provider": provider, "created": created, "scopes": token_payload.get("scopes", [])},
     )
     return mailbox
+
+
+async def connect_gmail_mailbox(
+    session: AsyncSession, cipher: TokenCipher, user: UserRow, address: str, token_payload: dict[str, Any]
+) -> MailboxRow:
+    return await connect_oauth_mailbox(session, cipher, user, address, token_payload)
+
+
+async def connect_microsoft_mailbox(
+    session: AsyncSession, cipher: TokenCipher, user: UserRow, address: str, token_payload: dict[str, Any]
+) -> MailboxRow:
+    return await connect_oauth_mailbox(
+        session, cipher, user, address, token_payload, provider="microsoft", kind="microsoft_oauth"
+    )
 
 
 async def add_imap_mailbox(
@@ -735,6 +914,9 @@ async def _upsert_sender_feedback(
             )
         )
     ).scalar_one_or_none()
+    if decision == "trusted":
+        # "Emails checked since" counts from the latest time the client trusted them.
+        await _clear_trust_stats(session, mailbox.id, scope, value)
     if existing is None:
         existing = SenderFeedbackRow(
             id=new_id("sfb"),
@@ -760,17 +942,14 @@ async def _upsert_sender_feedback(
 
 def reason_label(decision: str, code: str) -> str:
     """The quick-pick wording for a stored reason code ("" when unknown)."""
-    if code == ASSISTANT_REASON[0]:
-        return ASSISTANT_REASON[1]
-    return (SAFE_REASONS if decision == "safe" else FAKE_REASONS).get(code, "")
+    return _reason_label(decision, code)
 
 
 def clean_reason(decision: str, code: str | None, text: str | None) -> tuple[str, str]:
     """Validate a submitted reason. Unknown codes raise ``ValueError``; the
     free text is stripped of control characters and cut to 500 characters."""
     code = (code or "").strip()
-    allowed = set(SAFE_REASONS if decision == "safe" else FAKE_REASONS) | {ASSISTANT_REASON[0]}
-    if code and code not in allowed:
+    if code and code not in allowed_codes(decision):
         raise ValueError(f"unknown reason {code!r}")
     cleaned = "".join(ch for ch in (text or "") if ch in "\n\t" or ord(ch) >= 32).strip()
     cleaned = " ".join(cleaned.split())[:REASON_TEXT_MAX]
@@ -889,6 +1068,7 @@ async def remove_sender_feedback(
     if entry is None or entry.mailbox_id != mailbox.id:
         return None
     await session.delete(entry)
+    await _clear_trust_stats(session, mailbox.id, entry.scope, entry.value)
     audit(
         session,
         actor=user,
@@ -898,6 +1078,42 @@ async def remove_sender_feedback(
         details={"scope": entry.scope, "decision": entry.decision},
     )
     return entry
+
+
+async def _clear_trust_stats(session: AsyncSession, mailbox_id: str, scope: str, value: str) -> None:
+    await session.execute(
+        delete(SenderTrustStatsRow).where(
+            SenderTrustStatsRow.mailbox_id == mailbox_id,
+            SenderTrustStatsRow.scope == scope,
+            SenderTrustStatsRow.value == value.lower(),
+        )
+    )
+
+
+async def sender_entry_context(
+    session: AsyncSession, entries: list[SenderFeedbackRow]
+) -> tuple[dict[str, FeedbackReasonRow], dict[tuple[str, str, str], SenderTrustStatsRow]]:
+    """For the Mailboxes page: the newest reason given for each entry (by id)
+    and the re-check counters for each trusted entry (by mailbox, scope, value)."""
+    if not entries:
+        return {}, {}
+    ids = [e.id for e in entries]
+    reasons: dict[str, FeedbackReasonRow] = {}
+    rows = (
+        await session.execute(
+            select(FeedbackReasonRow)
+            .where(FeedbackReasonRow.sender_feedback_id.in_(ids))
+            .order_by(FeedbackReasonRow.created_at, FeedbackReasonRow.id)
+        )
+    ).scalars()
+    for row in rows:
+        reasons[row.sender_feedback_id or ""] = row
+    mailbox_ids = sorted({e.mailbox_id for e in entries})
+    stats_rows = (
+        await session.execute(select(SenderTrustStatsRow).where(SenderTrustStatsRow.mailbox_id.in_(mailbox_ids)))
+    ).scalars()
+    stats = {(r.mailbox_id, r.scope, r.value): r for r in stats_rows}
+    return reasons, stats
 
 
 async def request_rescore(session: AsyncSession, user: UserRow, message: MessageRow, mailbox: MailboxRow) -> bool:

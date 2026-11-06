@@ -1,0 +1,25 @@
+<!doctype html>
+{% from "_macros.html" import brand_mark %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="{{ theme_color }}" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="{{ theme_color_light }}" media="(prefers-color-scheme: light)">
+  <title>You're offline · Secureddy</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+</head>
+<body class="page-signin">
+<main id="main" class="content content-centered">
+  <section class="signin offline" aria-labelledby="offline-title">
+    <div class="signin-mark">{{ brand_mark("signin-shield") }}</div>
+    <h1 class="signin-title" id="offline-title">You're offline</h1>
+    <p class="signin-promise">Your mail is still protected. We keep checking it on our servers.</p>
+    <p class="signin-trust"><span>When you are back online, this page will show your latest verdicts.</span></p>
+    <a class="btn btn-primary btn-block" href="/">Try again</a>
+  </section>
+</main>
+</body>
+</html>

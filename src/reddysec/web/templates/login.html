@@ -1,63 +1,82 @@
 {% extends "base.html" %}
-{% from "_macros.html" import csrf with context %}
+{% from "_macros.html" import csrf, icon, brand_mark, provider_logo with context %}
 {% block title %}Sign in · Secureddy{% endblock %}
+{% block body_class %}page-signin{% endblock %}
 {% block content %}
-<section class="panel panel-narrow">
-  <a class="brand brand-large" href="/login">Secu<span>reddy</span></a>
-  <p class="lede">A bodyguard for your inbox. Links and files are opened on our servers before they ever reach you.</p>
+{% set any_provider = google_login_enabled or microsoft_login_enabled or yahoo_login_enabled %}
+<section class="signin" aria-labelledby="signin-title">
+  <div class="signin-mark">{{ brand_mark("signin-shield") }}</div>
+  <h1 class="signin-title" id="signin-title">Secu<span>reddy</span></h1>
+  <p class="signin-promise">A bodyguard for your inbox.</p>
 
   {% if error %}
   <div class="flash flash-error" role="alert">{{ error }}</div>
   {% endif %}
 
-  {% if google_login_enabled and not needs_code %}
-  <a class="btn btn-primary btn-block" href="/auth/google/start?next={{ next_url | urlencode }}">Sign in with Google</a>
-  <p class="help">We ask Google only for permission to read, label and move mail. We never see your Google password.</p>
-  <div class="divider"><span>or</span></div>
-  {% endif %}
-
-  <form method="post" action="/auth/login" class="stack">
+  {% if needs_code %}
+  <form method="post" action="/auth/login" class="stack signin-form">
     {{ csrf() }}
     <input type="hidden" name="next" value="{{ next_url }}">
-    {% if needs_code %}
     <p class="help">Open your authenticator app and enter the 6-digit code for <strong>{{ email }}</strong>.</p>
     <label class="field">
       <span>Code</span>
       <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus>
     </label>
     <button class="btn btn-primary btn-block" type="submit">Continue</button>
-    {% else %}
-    <label class="field">
-      <span>Email</span>
-      <input class="input" type="email" name="email" value="{{ email }}" autocomplete="username" required>
-    </label>
-    <label class="field">
-      <span>Password</span>
-      <input class="input" type="password" name="password" autocomplete="current-password" required>
-    </label>
-    <button class="btn btn-quiet btn-block" type="submit">Sign in with a password</button>
-    {% endif %}
   </form>
+  {% else %}
+  {% if any_provider %}
+  <div class="signin-buttons">
+    {% if google_login_enabled %}
+    <a class="pbtn pbtn-google" href="/auth/google/start?next={{ next_url | urlencode }}">{{ provider_logo("google") }}<span>Sign in with Google</span></a>
+    {% endif %}
+    {% if microsoft_login_enabled %}
+    <a class="pbtn pbtn-microsoft" href="/auth/microsoft/start?next={{ next_url | urlencode }}">{{ provider_logo("microsoft") }}<span>Sign in with Microsoft</span></a>
+    {% endif %}
+    {% if yahoo_login_enabled %}
+    <a class="pbtn pbtn-yahoo" href="/auth/yahoo/start?next={{ next_url | urlencode }}">{{ provider_logo("yahoo") }}<span>Sign in with Yahoo</span></a>
+    {% endif %}
+  </div>
+  {% endif %}
+  <p class="signin-trust">{{ icon("lock", "ico") }}<span>We never store your emails. Links open on our servers, not your phone.</span></p>
 
-  {% if dev_login_enabled and not needs_code %}
-  <details class="dev-box">
-    <summary>Developer sign-in</summary>
-    <form method="post" action="/auth/dev-login" class="stack">
+  <details class="signin-other"{% if not any_provider or error %} open{% endif %}>
+    <summary>Other ways to sign in</summary>
+    <form method="post" action="/auth/login" class="stack signin-form">
       {{ csrf() }}
       <input type="hidden" name="next" value="{{ next_url }}">
-      <label class="field"><span>Email</span><input class="input" type="email" name="email" required></label>
-      <label class="field"><span>Name</span><input class="input" type="text" name="name" placeholder="Optional"></label>
-      <label class="field"><span>Role</span>
-        <select class="input" name="role">
-          <option value="principal">principal</option>
-          <option value="assistant">assistant</option>
-          <option value="family">family</option>
-          <option value="concierge">concierge</option>
-          <option value="admin">admin</option>
-        </select>
+      <label class="field">
+        <span>Email</span>
+        <input class="input" type="email" name="email" value="{{ email }}" autocomplete="username" required>
       </label>
-      <button class="btn btn-quiet btn-block" type="submit">Sign in without a password</button>
+      <label class="field">
+        <span>Password</span>
+        <input class="input" type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn btn-quiet btn-block" type="submit">Sign in with a password</button>
     </form>
+
+    {% if dev_login_enabled %}
+    <details class="dev-box">
+      <summary>Developer sign-in</summary>
+      <form method="post" action="/auth/dev-login" class="stack">
+        {{ csrf() }}
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <label class="field"><span>Email</span><input class="input" type="email" name="email" required></label>
+        <label class="field"><span>Name</span><input class="input" type="text" name="name" placeholder="Optional"></label>
+        <label class="field"><span>Role</span>
+          <select class="input" name="role">
+            <option value="principal">principal</option>
+            <option value="assistant">assistant</option>
+            <option value="family">family</option>
+            <option value="concierge">concierge</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <button class="btn btn-quiet btn-block" type="submit">Sign in without a password</button>
+      </form>
+    </details>
+    {% endif %}
   </details>
   {% endif %}
 </section>

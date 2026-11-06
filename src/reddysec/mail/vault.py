@@ -20,6 +20,7 @@ from reddysec.core.crypto import DecryptError, TokenCipher
 from reddysec.store.models import MailboxSecret, utcnow
 
 KIND_GOOGLE_OAUTH = "google_oauth"
+KIND_MICROSOFT_OAUTH = "microsoft_oauth"
 KIND_IMAP_PASSWORD = "imap_password"
 KIND_IMAP_OAUTH = "imap_oauth"
 

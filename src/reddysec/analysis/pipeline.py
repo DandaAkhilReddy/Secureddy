@@ -47,6 +47,7 @@ from reddysec.models import (
     Signal,
     SignalStage,
     TriageLane,
+    TrustCheck,
     UrlVerdict,
     Verdict,
     VerdictLevel,
@@ -301,7 +302,12 @@ async def _finish(
     att_dynamic: dict[str, list[Signal]] = {}
     att_detonations: dict[str, _Detonated] = {}
 
-    if lane is TriageLane.DETONATE and ctx.detonator is not None:
+    # Trust never skips the checks. A sender the client marked safe takes the
+    # TRUSTED lane (the cheap heuristics stay off for them) but its links and
+    # files are still opened in the sandbox: the client asked us to re-check
+    # and confirm, and a hacked vendor account looks exactly like a trusted one.
+    client_recheck = lane is TriageLane.TRUSTED and trust is not None and trust.client_trust is not None
+    if (lane is TriageLane.DETONATE or client_recheck) and ctx.detonator is not None:
         selected_urls = select_urls_to_detonate(parsed, ctx.policy, url_static)
         if not ctx.policy.detonate_all_links:
             selected_urls = [u for u in selected_urls if static_risk(url_static.get(u.normalized, [])) >= 10]
@@ -417,6 +423,17 @@ async def _finish(
     top = sorted(all_signals, key=lambda s: -s.weight)[:8]
     llm_summary = assessment.plain_summary if assessment is not None and assessment.is_bec_likely else None
     summary = summarize(level, lane, top, llm_summary, parsed)
+    check = trust_check_for(trust, lane, level, ctx.feedback)
+    if check is not None and check.trusted_by_client:
+        summary = trust_summary(check, summary)
+        if check.outcome == "confirmed":
+            all_signals.append(
+                make_signal(
+                    "history.trust_confirmed", SignalStage.HISTORY, 0, "Confirmed again",
+                    "You trust this sender, and we checked this email too. It is safe.",
+                    scope=check.scope, value=check.value,
+                )
+            )
 
     log.info(
         "analysis_complete",
@@ -443,7 +460,55 @@ async def _finish(
         engine_version=ENGINE_VERSION,
         verified_domain=trust.aligned_domain if trust is not None else "",
         bulk_sender=bool(trust is not None and trust.authenticated_bulk_sender),
+        trust_check=check,
     )
+
+
+REASON_IN_SUMMARY_MAX = 120
+
+
+def trust_check_for(
+    trust: SenderTrust | None, lane: TriageLane, level: VerdictLevel, feedback: ClientFeedback | None
+) -> TrustCheck | None:
+    """How a trusted sender's message fared (see ``models.TrustCheck``).
+
+    Set for senders the client trusts ("Not suspicious?" / "Not fake?") and
+    for senders that took the TRUSTED lane for another reason (a known
+    correspondent, a policy-trusted domain). ``None`` for everyone else and
+    for blocked senders.
+    """
+    if trust is None or trust.client_blocked:
+        return None
+    by_client = trust.client_trust is not None
+    if not by_client and lane is not TriageLane.TRUSTED:
+        return None
+    if by_client:
+        scope = str(trust.client_trust)
+        value = trust.aligned_domain if scope == "domain" else trust.from_address
+    else:
+        scope = "domain" if trust.aligned_domain else "address"
+        value = trust.aligned_domain or trust.from_address
+    reason = (feedback.reasons.get(value.lower(), "") if feedback is not None and by_client else "").strip()
+    if level is VerdictLevel.SAFE:
+        outcome = "confirmed"
+    elif level is VerdictLevel.UNKNOWN:
+        outcome = "incomplete"
+    else:
+        outcome = "changed"
+    return TrustCheck(trusted_by_client=by_client, reason=reason, outcome=outcome, scope=scope, value=value)
+
+
+def trust_summary(check: TrustCheck, summary: str) -> str:
+    """The client-facing summary for a sender the client trusts."""
+    if check.outcome == "confirmed":
+        reason = check.reason.rstrip(". ")
+        if len(reason) > REASON_IN_SUMMARY_MAX:
+            reason = reason[: REASON_IN_SUMMARY_MAX - 1].rstrip() + "…"
+        why = f" (reason: {reason})" if reason else ""
+        return f"You told us you trust this sender{why}. We checked this one too. It's safe."
+    if check.outcome == "changed":
+        return f"This sender is on your trusted list, but this email looks different. {summary}"
+    return summary
 
 
 def _att_key(att: Attachment) -> str:

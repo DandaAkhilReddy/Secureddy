@@ -18,11 +18,13 @@ from typing import Any
 from pydantic import ValidationError
 
 from reddysec.models import Role, Verdict
+from reddysec.models.reasons import reason_words
 from reddysec.store.models import AuditLog, FeedbackReasonRow, MailboxRow, MessageRow, UserRow
 
 from .queries import (
     FAKE_REASONS,
     IN_FLIGHT_STATES,
+    NOT_FAKE_REASONS,
     PENDING_REQUEST_STATES,
     SAFE_REASONS,
     STATE_RESTORE_REQUESTED,
@@ -30,7 +32,6 @@ from .queries import (
     DailyCounts,
     SenderDecision,
     WeeklyCounts,
-    reason_label,
     verified_sender_domain,
 )
 
@@ -90,7 +91,8 @@ PROVIDER_LABELS = {
     "gmail": "Gmail",
     "yahoo": "Yahoo Mail",
     "icloud": "iCloud Mail",
-    "outlook": "Outlook.com",
+    "outlook": "Outlook.com (app password)",
+    "microsoft": "Outlook / Microsoft 365",
     "imap": "Other mailbox",
 }
 
@@ -359,12 +361,18 @@ class SenderEntryView:
     value: str
     trusted: bool
     label: str  # one plain line saying what the entry does
+    reason: str = ""  # the client's own reason, in words
+    since: str = ""  # "6 Nov": when they trusted or blocked it
+    checks: str = ""  # "Last confirmed 2 days ago · 5 emails checked since"
+    changed: bool = False  # the last re-check found something serious
 
 
-def sender_entry(entry: Any) -> SenderEntryView:
+def sender_entry(entry: Any, *, reason: Any = None, stats: Any = None, now: datetime | None = None) -> SenderEntryView:
+    """One row of "Trusted & blocked senders". ``reason`` is the newest
+    ``FeedbackReasonRow`` for the entry; ``stats`` its ``SenderTrustStatsRow``."""
     trusted = entry.decision == "trusted"
     if trusted and entry.scope == "domain":
-        label = f"Email that Google confirms is from {entry.value} is marked Checked."
+        label = f"Email that Google confirms is from {entry.value} is marked Checked after we check it."
     elif trusted and entry.authenticated:
         label = "Trusted when Google confirms it is really them. Links are still opened in our sandbox."
     elif trusted:
@@ -373,7 +381,25 @@ def sender_entry(entry: Any) -> SenderEntryView:
         label = "Goes straight to Quarantine."
     else:
         label = "Goes to Quarantine unless Google confirms it is really them."
-    return SenderEntryView(entry.id, entry.mailbox_id, entry.value, trusted, label)
+    words = reason_sentence(reason) if reason is not None else ""
+    since = short_date(getattr(entry, "created_at", None))
+    checks = ""
+    changed = False
+    if trusted:
+        count = int(getattr(stats, "emails_checked", 0) or 0) if stats is not None else 0
+        confirmed_at = getattr(stats, "last_confirmed_at", None) if stats is not None else None
+        changed = stats is not None and getattr(stats, "last_outcome", "") == "changed"
+        if count == 0:
+            checks = "No new email from them yet. We will check the next one."
+        else:
+            parts = []
+            if changed:
+                parts.append(f"Last email looked different ({humanize_ago(stats.last_checked_at, now)})")
+            elif confirmed_at is not None:
+                parts.append(f"Last confirmed {humanize_ago(confirmed_at, now)}")
+            parts.append(f"{count} email{'s' if count != 1 else ''} checked since")
+            checks = " · ".join(parts)
+    return SenderEntryView(entry.id, entry.mailbox_id, entry.value, trusted, label, words, since, checks, changed)
 
 
 @dataclass(frozen=True)
@@ -572,6 +598,55 @@ class CheckItem:
 
 
 @dataclass(frozen=True)
+class TrustView:
+    """The "trusted sender" box on a report (see ``models.TrustCheck``)."""
+
+    outcome: str  # confirmed | changed | incomplete
+    title: str
+    text: str
+    tone: str
+
+
+def trust_view(verdict: Verdict | None) -> TrustView | None:
+    check = verdict.trust_check if verdict is not None else None
+    if check is None or not check.trusted_by_client:
+        return None
+    reason = check.reason.rstrip(". ")
+    why = f" (reason: {reason})" if reason else ""
+    if check.outcome == "confirmed":
+        return TrustView(
+            "confirmed", "Confirmed again",
+            "We opened its links in our sandbox again and found nothing wrong. You can read it as usual.", "ok",
+        )
+    if check.outcome == "changed":
+        return TrustView(
+            "changed",
+            "This sender is on your trusted list, but this email looks different:",
+            "We still opened its links in our sandbox, and what we found is below. If you were not expecting "
+            "it, check with them on a number you already have before you click anything.",
+            "bad",
+        )
+    return TrustView(
+        "incomplete", "A sender you trust",
+        f"You told us you trust this sender{why}. We could not finish checking this one, so treat its links "
+        "with care until we do.", "grey",
+    )
+
+
+TRUST_CHANGED_PREFIX = "This sender is on your trusted list, but this email looks different."
+
+
+def trust_outcome(message: MessageRow) -> str:
+    """``confirmed`` / ``changed`` / ``incomplete`` for a client-trusted sender's message, else ``""``."""
+    raw = message.verdict if isinstance(message.verdict, dict) else {}
+    check = raw.get("trust_check")
+    if not isinstance(check, dict) or not check.get("trusted_by_client"):
+        return ""
+    outcome = check.get("outcome")
+    return outcome if outcome in ("confirmed", "changed", "incomplete") else ""
+
+
+@dataclass(frozen=True)
 class ReportView:
     chip: Chip
     summary: str
@@ -598,6 +673,7 @@ class ReportView:
     can_mark_fake: bool = False
     can_recheck: bool = False
     previous_level: str = ""
+    trust: TrustView | None = None
 
 
 ArtifactUrl = Callable[[str], str]
@@ -801,9 +877,12 @@ def build_report(message: MessageRow, *, artifact_url: ArtifactUrl, download_url
     previous = raw.get("previous") if isinstance(raw.get("previous"), dict) else None
     verified = verified_sender_domain(message)
     sender = (message.from_address or "").lower()
+    summary = verdict.summary
+    if summary.startswith(TRUST_CHANGED_PREFIX) and verdict.trust_check is not None:
+        summary = summary[len(TRUST_CHANGED_PREFIX):].strip() or summary  # the trust box says it already
     return ReportView(
         chip=chip,
-        summary=verdict.summary,
+        summary=summary,
         lane=lane_label(verdict.lane.value),
         score=verdict.score,
         signals=_signals(verdict.signals),
@@ -827,6 +906,7 @@ def build_report(message: MessageRow, *, artifact_url: ArtifactUrl, download_url
         can_mark_fake=not busy and decision != "fake",
         can_recheck=not busy,
         previous_level=str(previous.get("level", "")) if previous else "",
+        trust=trust_view(verdict),
     )
 
 
@@ -840,6 +920,14 @@ def list_reason(message: MessageRow) -> str:
     sender = (message.from_address or "").lower()
     verified = verified_sender_domain(message)
     decision = client_decision(message)
+    outcome = trust_outcome(message)
+    if outcome == "confirmed" and not decision:
+        return "You trust this sender. We checked this one too, and it's safe."
+    if outcome == "changed" and not decision:
+        positives = [s for s in verdict.signals if s.weight > 0 and s.code not in GOOD_SIGN_CODES]
+        top = max(positives, key=lambda s: s.weight) if positives else None
+        detail = f" {short_reason(top, sender=sender, verified_domain=verified)}." if top is not None else ""
+        return f"A sender you trust, but this email looks different.{detail}"
     if decision == "safe" and message.level == "safe":
         return "You marked this sender as safe."
     if decision == "fake":
@@ -866,13 +954,11 @@ class ReasonChoice:
 
 SAFE_REASON_CHOICES = tuple(ReasonChoice(k, v) for k, v in SAFE_REASONS.items())
 FAKE_REASON_CHOICES = tuple(ReasonChoice(k, v) for k, v in FAKE_REASONS.items())
+NOT_FAKE_REASON_CHOICES = tuple(ReasonChoice(k, v) for k, v in NOT_FAKE_REASONS.items())
 
 
 def _reason_words(decision: str, code: str, text: str) -> str:
-    label = reason_label(decision, code) if code != "other" else ""
-    if label and text:
-        return f"{label}. {text}"
-    return text or label
+    return reason_words(decision, code, text)
 
 
 def reason_sentence(row: FeedbackReasonRow) -> str:
@@ -894,43 +980,43 @@ def decision_note(row: FeedbackReasonRow | None, decision: str) -> str:
 
 
 def decision_flash(result: SenderDecision, *, sender: str) -> str:
-    """What the client reads right after "This is safe" / "This is fake"."""
+    """What the client reads right after "Not suspicious?" / "Not fake?" /
+    "This is fake": what happened to this email, then exactly what happens
+    next time. Short and plain on purpose."""
     what = result.value
     if result.decision == "trusted":
+        done = {
+            "restore": "Done. We moved it back to your inbox.",
+            "relabel": "Done. We marked it Checked.",
+            "none": "Done.",
+            "quarantine": "Done.",
+        }[result.message_action]
         if result.scope == "domain":
-            future = (
-                f"From now on, emails that Google confirms are from {what} will be marked Checked. "
-                "We will still warn you if one carries a dangerous link or file."
-            )
+            who = what
+            scope_note = ""
         elif result.authenticated and result.shared_platform:
             domain = what.rsplit("@", 1)[-1]
-            future = (
-                f"Many people send email from {domain}, so we will trust only {what}, and only when Google "
-                "confirms it is really them. We will still open their links in our sandbox."
+            who = what
+            scope_note = (
+                f" Many people send email from {domain}, so we trust only {what}, and only when Google "
+                "confirms it is really them."
             )
         elif result.authenticated:
-            future = f"We'll trust messages from {what} when Google confirms they are really from them."
+            who = what
+            scope_note = " We trust them when Google confirms the email is really from them."
         else:
-            future = (
-                "We'll trust messages from this address. Because it wasn't verified by Google, "
-                "we'll still check its links."
-            )
+            who = what
+            scope_note = " Because it wasn't verified by Google, we trust it only a little."
+        return f"{done} Next time {who} writes, we'll still check it and tell you if it's safe.{scope_note}"
+
+    if result.scope == "domain" or result.authenticated:
+        future = f"From now on, email from {what} goes straight to Quarantine."
     else:
-        if result.scope == "domain":
-            future = f"From now on, email from {what} goes straight to Quarantine."
-        elif result.authenticated:
-            future = f"From now on, email from {what} goes straight to Quarantine."
-        else:
-            future = (
-                f"From now on, email that claims to be from {what} but is not confirmed by Google goes "
-                "straight to Quarantine."
-            )
-    now = {
-        "restore": " We are moving this email back to your inbox and marking it Checked.",
-        "relabel": " We are changing this email's label to Checked.",
-        "quarantine": " We are moving this email to Quarantine now.",
-        "none": "",
-    }[result.message_action]
+        future = (
+            f"From now on, email that claims to be from {what} but is not confirmed by Google goes "
+            "straight to Quarantine."
+        )
+    now = " We are moving this email to Quarantine now." if result.message_action == "quarantine" else ""
     return future + now
 
 
@@ -954,6 +1040,8 @@ class MessageListRow:
     avatar: str = "av-0"
     can_mark_safe: bool = False
     can_mark_fake: bool = False
+    trust: str = ""  # confirmed | changed | incomplete for a client-trusted sender
+    quarantined: bool = False
 
 
 def row_actions(message: MessageRow) -> tuple[bool, bool]:
@@ -977,9 +1065,37 @@ def list_rows(pairs: list[tuple[MessageRow, MailboxRow]]) -> list[MessageListRow
             MessageListRow(
                 m, mb, verdict_chip(m), message_summary(m), list_reason(m),
                 initials(m.from_name, m.from_address), avatar_tone(m.from_address or m.from_name), safe, fake,
+                trust_outcome(m), bool(m.quarantined),
             )
         )
     return rows
+
+
+# Email domains whose provider we know. Outlook.com-family addresses are
+# better served by "Sign in with Microsoft" (no app password, server rules).
+PROVIDER_DOMAINS: dict[str, str] = {
+    "yahoo.com": "yahoo", "ymail.com": "yahoo", "rocketmail.com": "yahoo", "aol.com": "yahoo",
+    "outlook.com": "outlook", "hotmail.com": "outlook", "live.com": "outlook", "msn.com": "outlook",
+    "icloud.com": "icloud", "me.com": "icloud", "mac.com": "icloud",
+}
+
+
+def detect_provider(address: str) -> str | None:
+    """``yahoo`` / ``icloud`` / ``outlook`` from the address's domain, or None.
+    Country variants (yahoo.co.uk, hotmail.co.uk, outlook.fr, ...) count too."""
+    domain = (address or "").strip().lower().rsplit("@", 1)[-1] if "@" in (address or "") else ""
+    if not domain:
+        return None
+    if domain in PROVIDER_DOMAINS:
+        return PROVIDER_DOMAINS[domain]
+    match = _COUNTRY_VARIANT.match(domain)
+    if match:
+        return "yahoo" if match.group(1) in ("yahoo", "ymail") else "outlook"
+    return None
+
+
+_COUNTRY_VARIANT = re.compile(r"^(yahoo|ymail|hotmail|outlook|live)\.(?:(?:co|com)\.)?[a-z]{2}$")
+AOL_IMAP_HOST = "imap.aol.com"
 
 
 @dataclass(frozen=True)
@@ -1544,6 +1660,9 @@ GOOD_SIGN_COPY: dict[str, SignalCopy] = {
     ),
     "sender.frequent_sender": SignalCopy("A sender you hear from often", "You have received mail from them before."),
     "history.client_trusted": SignalCopy("You told us you trust this sender", "You marked {value} as safe."),
+    "history.trust_confirmed": SignalCopy(
+        "Confirmed again", "You trust this sender, and we checked this email too. It is safe."
+    ),
     "url.sender_own_domain": SignalCopy(
         "The links stay on your contact's own website", "They go to the same website as someone you write to."
     ),
