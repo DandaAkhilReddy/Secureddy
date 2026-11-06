@@ -43,6 +43,7 @@ from reddysec.core.ids import new_id
 from reddysec.models import MALICIOUS_THRESHOLD, SUSPICIOUS_THRESHOLD, Role
 from reddysec.store.models import (
     AuditLog,
+    FeedbackReasonRow,
     MailboxRow,
     MailboxSecret,
     MessageRow,
@@ -70,6 +71,24 @@ IN_FLIGHT_STATES = frozenset({"pending", "analyzing"})
 PAGE_SIZE = 50
 RECHECK_DAYS = 7
 RECHECK_LIMIT = 200
+REASON_TEXT_MAX = 500
+
+# Quick-pick reasons on "Not suspicious?" / "This is fake". The reason is
+# recorded and shown; it never changes what the sender is trusted for.
+SAFE_REASONS: dict[str, str] = {
+    "known_sender": "I know this sender",
+    "expected": "I ordered this / expected it",
+    "newsletter": "It's a newsletter I signed up for",
+    "other": "Other",
+}
+FAKE_REASONS: dict[str, str] = {
+    "unknown_sender": "I don't know this sender",
+    "money_or_codes": "Asks for money or codes",
+    "impersonation": "Pretends to be someone",
+    "other": "Other",
+}
+# Set by the assistant's proposal cards, never offered as a radio button.
+ASSISTANT_REASON = ("assistant", "Agreed with the assistant's suggestion")
 
 # Representative scores for an analyst override so the stored score always
 # agrees with the stored level.
@@ -434,6 +453,51 @@ async def weekly_counts(session: AsyncSession, user: UserRow, *, now: datetime |
     return WeeklyCounts(int(checked), int(suspicious), int(quarantined), int(safe))
 
 
+@dataclass(frozen=True)
+class DailyCounts:
+    """Per-day counts for the dashboard sparklines, oldest day first."""
+
+    days: tuple[datetime, ...]
+    safe: tuple[int, ...]
+    suspicious: tuple[int, ...]
+    quarantined: tuple[int, ...]
+
+
+async def daily_counts(
+    session: AsyncSession, user: UserRow, *, days: int = 7, now: datetime | None = None
+) -> DailyCounts:
+    """The last ``days`` calendar days (UTC, today included), counted the way
+    :func:`weekly_counts` counts. The rows are few (a private inbox), so they
+    are bucketed in Python, which keeps the SQL portable."""
+    now = now or utcnow()
+    today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    starts = [today - timedelta(days=days - 1 - i) for i in range(days)]
+    rows = (
+        await session.execute(
+            select(MessageRow.received_at, MessageRow.level, MessageRow.quarantined)
+            .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
+            .where(
+                MailboxRow.user_id.in_(visible_owner_ids(user)),
+                MessageRow.received_at >= starts[0],
+                MessageRow.level.is_not(None),
+            )
+        )
+    ).all()
+    safe, suspicious, quarantined = [0] * days, [0] * days, [0] * days
+    for received_at, level, is_quarantined in rows:
+        at = received_at if received_at.tzinfo else received_at.replace(tzinfo=UTC)
+        index = (at.astimezone(UTC) - starts[0]).days
+        if not 0 <= index < days:
+            continue
+        if level == "safe":
+            safe[index] += 1
+        elif level == "suspicious":
+            suspicious[index] += 1
+        if is_quarantined:
+            quarantined[index] += 1
+    return DailyCounts(tuple(starts), tuple(safe), tuple(suspicious), tuple(quarantined))
+
+
 def _message_filters(
     user: UserRow,
     *,
@@ -645,7 +709,7 @@ async def _upsert_sender_feedback(
     value: str,
     decision: str,
     authenticated: bool,
-) -> None:
+) -> SenderFeedbackRow:
     """One entry per (mailbox, scope, value); the latest decision wins. A new
     decision also clears the opposite decision for the same sender (address or
     domain), so "safe" after "fake" (or the reverse) does what the client means."""
@@ -672,19 +736,18 @@ async def _upsert_sender_feedback(
         )
     ).scalar_one_or_none()
     if existing is None:
-        session.add(
-            SenderFeedbackRow(
-                id=new_id("sfb"),
-                mailbox_id=mailbox.id,
-                scope=scope,
-                value=value,
-                decision=decision,
-                authenticated=authenticated,
-                source_message_id=message.id,
-                created_by=user.id,
-                created_at=utcnow(),
-            )
+        existing = SenderFeedbackRow(
+            id=new_id("sfb"),
+            mailbox_id=mailbox.id,
+            scope=scope,
+            value=value,
+            decision=decision,
+            authenticated=authenticated,
+            source_message_id=message.id,
+            created_by=user.id,
+            created_at=utcnow(),
         )
+        session.add(existing)
     else:
         existing.decision = decision
         existing.authenticated = authenticated
@@ -692,22 +755,53 @@ async def _upsert_sender_feedback(
         existing.created_by = user.id
         existing.created_at = utcnow()
     await session.flush()
+    return existing
+
+
+def reason_label(decision: str, code: str) -> str:
+    """The quick-pick wording for a stored reason code ("" when unknown)."""
+    if code == ASSISTANT_REASON[0]:
+        return ASSISTANT_REASON[1]
+    return (SAFE_REASONS if decision == "safe" else FAKE_REASONS).get(code, "")
+
+
+def clean_reason(decision: str, code: str | None, text: str | None) -> tuple[str, str]:
+    """Validate a submitted reason. Unknown codes raise ``ValueError``; the
+    free text is stripped of control characters and cut to 500 characters."""
+    code = (code or "").strip()
+    allowed = set(SAFE_REASONS if decision == "safe" else FAKE_REASONS) | {ASSISTANT_REASON[0]}
+    if code and code not in allowed:
+        raise ValueError(f"unknown reason {code!r}")
+    cleaned = "".join(ch for ch in (text or "") if ch in "\n\t" or ord(ch) >= 32).strip()
+    cleaned = " ".join(cleaned.split())[:REASON_TEXT_MAX]
+    if cleaned and not code:
+        code = "other"
+    return code, cleaned
 
 
 async def record_sender_decision(
-    session: AsyncSession, user: UserRow, message: MessageRow, mailbox: MailboxRow, decision: str
+    session: AsyncSession,
+    user: UserRow,
+    message: MessageRow,
+    mailbox: MailboxRow,
+    decision: str,
+    *,
+    reason_code: str = "",
+    reason_text: str = "",
 ) -> SenderDecision:
     """"This is safe" (``decision="safe"``) or "This is fake" (``"fake"``).
 
     Records what the client said about the sender and asks the worker to act
     on this message now. Raises ``ValueError`` when the message has no usable
-    sender (nothing to trust or block).
+    sender (nothing to trust or block). ``reason_code`` / ``reason_text`` (as
+    returned by :func:`clean_reason`) are stored in ``feedback_reasons``; they
+    are context for people and never change the trust math.
     """
     if decision not in ("safe", "fake"):
         raise ValueError(f"unknown decision {decision!r}")
     scope, value, authenticated, shared = _sender_target(message)
     stored = "trusted" if decision == "safe" else "blocked"
-    await _upsert_sender_feedback(
+    entry = await _upsert_sender_feedback(
         session, user=user, message=message, mailbox=mailbox, scope=scope, value=value,
         decision=stored, authenticated=authenticated,
     )
@@ -728,22 +822,52 @@ async def record_sender_decision(
     _update_verdict(
         message, client_decision={"decision": decision, "by": user.id, "at": utcnow().isoformat()}
     )
+    details: dict[str, Any] = {
+        "scope": scope,
+        "value": value,
+        "authenticated": authenticated,
+        "shared_platform": shared,
+        "message_action": action,
+        "level": message.level,
+    }
+    if reason_code or reason_text:
+        session.add(
+            FeedbackReasonRow(
+                id=new_id("frs"),
+                sender_feedback_id=entry.id,
+                message_id=message.id,
+                user_id=user.id,
+                decision=decision,
+                reason_code=reason_code,
+                reason_text=reason_text,
+                created_at=utcnow(),
+            )
+        )
+        details["reason_code"] = reason_code
+        details["reason"] = reason_text
     audit(
         session,
         actor=user,
         action="sender_trusted" if decision == "safe" else "sender_blocked",
         mailbox_id=mailbox.id,
         target=message.id,
-        details={
-            "scope": scope,
-            "value": value,
-            "authenticated": authenticated,
-            "shared_platform": shared,
-            "message_action": action,
-            "level": message.level,
-        },
+        details=details,
     )
     return SenderDecision(stored, scope, value, authenticated, shared, action)
+
+
+async def latest_reasons(session: AsyncSession, message_ids: list[str]) -> dict[str, FeedbackReasonRow]:
+    """The newest reason the client gave for each of ``message_ids``."""
+    if not message_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(FeedbackReasonRow)
+            .where(FeedbackReasonRow.message_id.in_(message_ids))
+            .order_by(FeedbackReasonRow.created_at, FeedbackReasonRow.id)
+        )
+    ).scalars()
+    return {r.message_id: r for r in rows}
 
 
 async def list_sender_feedback(session: AsyncSession, mailbox_ids: list[str]) -> list[SenderFeedbackRow]:

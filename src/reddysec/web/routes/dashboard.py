@@ -13,6 +13,7 @@ from .. import presenters, queries
 from ..auth import current_user
 from ..templating import render
 from . import protected_router
+from .assistant import SUGGESTIONS
 
 router = protected_router()
 
@@ -23,6 +24,7 @@ async def dashboard(request: Request, user: UserRow = Depends(current_user)) -> 
     async with request.app.state.db.session() as session:
         mailboxes = await queries.list_mailboxes(session, user)
         counts = await queries.weekly_counts(session, user, now=now)
+        daily = await queries.daily_counts(session, user, now=now)
         recent = await queries.list_messages(session, user, limit=15)
         notifications = await queries.list_notifications(
             session, user, limit=5, since=now - timedelta(days=7)
@@ -36,7 +38,10 @@ async def dashboard(request: Request, user: UserRow = Depends(current_user)) -> 
             "first_name": presenters.first_name(user),
             "sentence": presenters.weekly_sentence(counts, has_mailboxes=bool(active)),
             "counts": counts,
-            "stat_cards": presenters.stat_cards(counts),
+            "stat_cards": presenters.stat_cards(counts, daily),
+            "hero": presenters.hero(counts, has_mailboxes=bool(active)),
+            "suggestions": SUGGESTIONS,
+            "assistant_enabled": request.app.state.assistant.enabled,
             "mailboxes": [
                 {"row": m, "status": presenters.mailbox_status_chip(m), "mode": presenters.mode_chip(m)}
                 for m in mailboxes

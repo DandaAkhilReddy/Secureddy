@@ -89,6 +89,16 @@ What runs today, end to end, in this repository:
   "Re-check last 7 days" to re-label mail with today's rules.
 - Web app: dashboard, reports with sandbox screenshots, mailbox onboarding,
   concierge queue, audit log, TOTP.
+- "Not suspicious?" / "This is fake" on every flagged email, with a quick-pick
+  reason and optional note (stored in `feedback_reasons`, shown on the report,
+  the audit log and the concierge queue; it never changes the trust math).
+- "Ask Secureddy" (`src/reddysec/assistant/`): an in-app chat that answers
+  questions about the client's own verdicts with read-only tools. It can only
+  *propose* "mark safe / fake / check again"; the client clicks the real
+  button. Switch it on with `RS_ASSISTANT_PROVIDER` (anthropic,
+  azure_foundry, azure_openai; empty follows `RS_LLM_PROVIDER`) and the
+  existing API key settings; optional `RS_ASSISTANT_MODEL`,
+  `RS_ASSISTANT_MAX_TURNS` (6), `RS_ASSISTANT_DAILY_MESSAGE_LIMIT` (200).
 - Azure infrastructure as Bicep (validated), Dockerfiles, CI/CD, runbooks.
 
 Test suite: 1,379 tests (unit, functional, browser integration, and an

@@ -21,6 +21,7 @@
     </div>
     {% if item.summary %}<p>{{ item.summary }}</p>{% endif %}
     {% if item.request_note %}<p class="note">Client's note: {{ item.request_note }}</p>{% endif %}
+    {% if item.client_reason %}<p class="note note-reason">{{ item.client_reason }}</p>{% endif %}
     <div class="actions actions-wrap">
       <form method="post" action="/concierge/{{ item.message.id }}/reviewed" class="inline-form">
         {{ csrf() }}

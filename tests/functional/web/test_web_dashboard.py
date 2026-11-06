@@ -37,7 +37,8 @@ async def test_dashboard_with_messages_counts_and_rows(client, seed, login):
     assert "Old news" not in page.text or "9 days" not in page.text  # listed in recent, not counted
     assert page.text.count('class="chip tone-bad"') >= 1
     assert "Checking" in page.text
-    assert "Sandboxed" in page.text and "detonate" not in page.text.split("<tbody>")[1]
+    recent = page.text.split('id="recent-title"')[1]
+    assert "Sandboxed" in recent and "detonate" not in recent
     assert "Needs your attention" in page.text and "A dangerous email was quarantined" in page.text
     assert f"/messages/{bad.id}" in page.text
 

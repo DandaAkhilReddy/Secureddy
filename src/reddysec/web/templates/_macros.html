@@ -1,7 +1,54 @@
 {# Small reusable pieces. Keep them dumb: all wording comes from presenters. #}
 
+{# Inline SVG icons: stroke-only, currentColor, decorative (the text next to them carries the meaning). #}
+{% macro icon(name, cls="ico") -%}
+<svg class="{{ cls }}" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+{%- if name == "ok" or name == "shield-check" -%}
+<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>
+{%- elif name == "warn" or name == "alert" -%}
+<path d="M10.3 4.2L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 4.2a2 2 0 00-3.4 0z"/><path d="M12 9.5v4"/><path d="M12 17h.01"/>
+{%- elif name == "bad" or name == "lock" -%}
+<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>
+{%- elif name == "grey" or name == "clock" -%}
+<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+{%- elif name == "accent" or name == "dot" -%}
+<circle cx="12" cy="12" r="4"/>
+{%- elif name == "home" -%}
+<path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/>
+{%- elif name == "mail" -%}
+<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>
+{%- elif name == "chat" -%}
+<path d="M20 15a2 2 0 01-2 2H8l-4 4V5a2 2 0 012-2h12a2 2 0 012 2z"/><path d="M8 9h8"/><path d="M8 13h5"/>
+{%- elif name == "inbox" -%}
+<path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5.5 5h13L21 13v6H3v-6z"/>
+{%- elif name == "list" -%}
+<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/>
+{%- elif name == "settings" -%}
+<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>
+{%- elif name == "users" -%}
+<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><path d="M16 4.5a3.5 3.5 0 010 7"/><path d="M18 14a6.5 6.5 0 013.5 6"/>
+{%- elif name == "send" -%}
+<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>
+{%- elif name == "plus" -%}
+<path d="M12 5v14"/><path d="M5 12h14"/>
+{%- elif name == "arrow" -%}
+<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>
+{%- elif name == "spark" -%}
+<path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="M6.3 6.3l2.5 2.5"/><path d="M15.2 15.2l2.5 2.5"/><path d="M6.3 17.7l2.5-2.5"/><path d="M15.2 8.8l2.5-2.5"/>
+{%- elif name == "refresh" -%}
+<path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/>
+{%- elif name == "check" -%}
+<path d="M5 12l5 5 9-10"/>
+{%- elif name == "x" -%}
+<path d="M6 6l12 12"/><path d="M18 6L6 18"/>
+{%- else -%}
+<circle cx="12" cy="12" r="9"/>
+{%- endif -%}
+</svg>
+{%- endmacro %}
+
 {% macro chip(c) -%}
-<span class="chip tone-{{ c.tone }}">{{ c.label }}</span>
+<span class="chip tone-{{ c.tone }}">{{ icon(c.tone, "chip-ico") }}<span>{{ c.label }}</span></span>
 {%- endmacro %}
 
 {% macro csrf() -%}
@@ -26,4 +73,104 @@
 
 {% macro sender(message) -%}
 {% if message.from_name %}<strong>{{ message.from_name }}</strong> <span class="muted">{{ message.from_address }}</span>{% else %}<strong>{{ message.from_address or "Unknown sender" }}</strong>{% endif %}
+{%- endmacro %}
+
+{% macro avatar(text, tone) -%}
+<span class="avatar {{ tone }}" aria-hidden="true">{{ text }}</span>
+{%- endmacro %}
+
+{# "Not suspicious?" and "This is fake", each a <details> with a small form:
+   quick-pick reasons, optional free text, one submit. Works without JS. #}
+{% macro decide_forms(message_id, can_safe, can_fake, next="", flagged=True, compact=False) -%}
+<div class="decide{% if compact %} decide-compact{% endif %}">
+  {% if can_safe %}
+  <details class="decide-item decide-safe">
+    <summary class="btn {{ 'btn-small' if compact }} btn-calm">{{ icon("shield-check") }}<span>{{ "Not suspicious?" if flagged else "Always trust this sender" }}</span></summary>
+    <form method="post" action="/messages/{{ message_id }}/safe" class="decide-form">
+      {{ csrf() }}
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <fieldset class="picks">
+        <legend>Why is it safe? <span class="muted">(optional)</span></legend>
+        {% for r in SAFE_REASONS %}
+        <label class="pick"><input type="radio" name="reason_code" value="{{ r.code }}"><span>{{ r.label }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <label class="field"><span>Tell us why <span class="muted">(optional)</span></span>
+        <textarea class="input" name="reason_text" maxlength="500" rows="2"></textarea>
+      </label>
+      <div class="decide-submit">
+        <button class="btn btn-primary btn-small" type="submit">Mark as safe</button>
+        <span class="help">We trust this sender next time.</span>
+      </div>
+    </form>
+  </details>
+  {% endif %}
+  {% if can_fake %}
+  <details class="decide-item decide-fake">
+    <summary class="btn {{ 'btn-small' if compact }} btn-danger">{{ icon("lock") }}<span>This is fake</span></summary>
+    <form method="post" action="/messages/{{ message_id }}/fake" class="decide-form">
+      {{ csrf() }}
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <fieldset class="picks">
+        <legend>What gave it away? <span class="muted">(optional)</span></legend>
+        {% for r in FAKE_REASONS %}
+        <label class="pick"><input type="radio" name="reason_code" value="{{ r.code }}"><span>{{ r.label }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <label class="field"><span>Tell us why <span class="muted">(optional)</span></span>
+        <textarea class="input" name="reason_text" maxlength="500" rows="2"></textarea>
+      </label>
+      <div class="decide-submit">
+        <button class="btn btn-danger-solid btn-small" type="submit">Mark as fake</button>
+        <span class="help">Their email goes to Quarantine from now on.</span>
+      </div>
+    </form>
+  </details>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{# A proposal from the assistant. The button is a normal form; the model cannot press it. #}
+{% macro proposal_card(p) -%}
+<div class="proposal proposal-{{ p.tone }} proposal-{{ p.status }}" data-proposal>
+  <p class="proposal-title">{{ icon("spark") }}<span>{{ p.title }}</span></p>
+  <div class="proposal-mail">
+    <span class="proposal-sender">{{ p.sender }}{% if p.address and p.address != p.sender %} <span class="muted">{{ p.address }}</span>{% endif %}</span>
+    <a class="proposal-subject" href="{{ p.report }}">{{ p.subject }}</a>
+  </div>
+  {% if p.reason %}<p class="proposal-reason">{{ p.reason }}</p>{% endif %}
+  {% if p.status == "open" %}
+  <div class="proposal-actions">
+    <form method="post" action="{{ p.action }}">
+      {{ csrf() }}
+      <input type="hidden" name="next" value="{{ p.next }}">
+      {% if p.send_reason %}<input type="hidden" name="reason_code" value="assistant">{% endif %}
+      <button class="btn btn-small {{ 'btn-danger-solid' if p.kind == 'mark_fake' else 'btn-primary' }}" type="submit">{{ p.yes }}</button>
+    </form>
+    <form method="post" action="{{ p.decline_action }}" data-decline>
+      {{ csrf() }}
+      <input type="hidden" name="reply_id" value="{{ p.reply_id }}">
+      <input type="hidden" name="index" value="{{ p.index }}">
+      <button class="btn btn-small btn-quiet" type="submit">No</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="proposal-status">{{ icon("check" if p.status == "done" else "x") }}<span>{{ p.status_text }}</span></p>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{# Small line drawings for empty states. Decorative. #}
+{% macro empty_art(kind="inbox") -%}
+<svg class="empty-art" viewBox="0 0 120 80" width="120" height="80" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+{%- if kind == "shield" -%}
+<path class="ea-soft" d="M20 66h80"/><path d="M60 10l22 9v15c0 14-9 25-22 31-13-6-22-17-22-31V19z"/><path class="ea-accent" d="M51 38l7 7 12-13"/>
+{%- elif kind == "chat" -%}
+<path class="ea-soft" d="M16 70h88"/><rect x="18" y="12" width="56" height="34" rx="8"/><path d="M30 46l-6 10 14-10"/><rect x="50" y="30" width="52" height="28" rx="8"/><path class="ea-accent" d="M62 44h28"/><path d="M30 25h32"/><path d="M30 33h20"/>
+{%- elif kind == "list" -%}
+<path class="ea-soft" d="M16 70h88"/><rect x="26" y="10" width="68" height="52" rx="6"/><path d="M36 24h48"/><path d="M36 36h36"/><path class="ea-accent" d="M36 48h24"/>
+{%- else -%}
+<path class="ea-soft" d="M16 70h88"/><path d="M24 40h22l5 9h18l5-9h22"/><path d="M34 14h52l12 26v22H22V40z"/><path class="ea-accent" d="M50 28h20"/>
+{%- endif -%}
+</svg>
 {%- endmacro %}

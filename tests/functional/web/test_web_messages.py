@@ -94,7 +94,8 @@ async def test_report_renders_everything(client, seed, artifact_store, login, ri
     )
     assert "Release to my inbox" in text
     assert "Ask the concierge to review" in text
-    assert "This is safe &mdash; I know this sender" in text and "This is fake" in text
+    assert "Not suspicious?" in text and "Mark as safe" in text and "This is fake" in text
+    assert "I know this sender" in text and "Asks for money or codes" in text  # quick-pick reasons
     assert f'action="/messages/{message.id}/safe"' in text and f'action="/messages/{message.id}/fake"' in text
     assert "Check again" in text and "Why we think this" in text and "What we checked" in text
     assert "Opened in our sandbox before you saw it" in text

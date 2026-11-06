@@ -22,6 +22,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
+from reddysec.assistant.agent import Assistant
+from reddysec.assistant.llm import ChatModel, chat_model_from_settings
 from reddysec.config import Settings, get_settings
 from reddysec.core.artifacts import ArtifactStore, artifact_store_from_settings
 from reddysec.core.crypto import TokenCipher
@@ -30,7 +32,7 @@ from reddysec.store.db import Database, get_database
 
 from . import auth
 from .auth import LoginRequired, OAuthProvider
-from .routes import api, audit, concierge, dashboard, hooks, mailboxes, messages, notifications
+from .routes import api, assistant, audit, concierge, dashboard, hooks, mailboxes, messages, notifications
 from .routes import settings as settings_routes
 from .security import (
     RateLimiter,
@@ -65,6 +67,7 @@ def create_app(
     pubsub_token: str | None = None,
     artifact_store: ArtifactStore | None = None,
     enable_reading_room: bool = False,
+    chat_model: ChatModel | None = None,
 ) -> FastAPI:
     """Build the FastAPI application.
 
@@ -94,6 +97,13 @@ def create_app(
         oauth = default_oauth(settings)
     store = artifact_store or artifact_store_from_settings(settings)
 
+    owned_http = None
+    if chat_model is None and settings.effective_assistant_provider not in ("", "none"):
+        import httpx
+
+        owned_http = httpx.AsyncClient()
+        chat_model = chat_model_from_settings(settings, owned_http)
+
     room_bundle = None
     if room_router is None and enable_reading_room:
         from .room import build_reading_room  # lazy: imports the chamber (Playwright)
@@ -113,6 +123,8 @@ def create_app(
             else:
                 yield
         finally:
+            if owned_http is not None:
+                await owned_http.aclose()
             if owns_database:
                 await database.dispose()
 
@@ -141,6 +153,11 @@ def create_app(
     app.state.room_enabled = room_router is not None
     app.state.dev_login_enabled = bool(settings.dev_login_enabled) and not settings.is_prod
     app.state.rate_limiter = RateLimiter(rate=20, per=60.0)
+    app.state.assistant = Assistant(
+        chat_model,
+        max_turns=max(1, settings.assistant_max_turns),
+        daily_limit=max(0, settings.assistant_daily_message_limit),
+    )
 
     # Middleware order: the last one added runs first. Security headers must
     # wrap everything so even a 429 from the rate limiter carries them.
@@ -158,6 +175,7 @@ def create_app(
         auth.router,
         dashboard.router,
         messages.router,
+        assistant.router,
         mailboxes.router,
         audit.router,
         concierge.router,

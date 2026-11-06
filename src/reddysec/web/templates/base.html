@@ -1,4 +1,5 @@
 <!doctype html>
+{% from "_macros.html" import icon %}
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -8,34 +9,38 @@
   <title>{% block title %}Secureddy{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 <a class="skip-link" href="#main">Skip to content</a>
 {% if user %}
 <div class="shell">
   <aside class="nav" aria-label="Main navigation">
-    <a class="brand" href="/">Secu<span>reddy</span></a>
-    <nav>
-      <ul>
-        {% for href, label in nav_items %}
-        <li>
-          <a href="{{ href }}"{% if current_path == href or (href != '/' and current_path.startswith(href)) %} aria-current="page"{% endif %}>{{ label }}</a>
-        </li>
-        {% endfor %}
-      </ul>
-    </nav>
-    <div class="nav-foot">
-      <div class="nav-user">
-        <strong>{{ user.display_name }}</strong>
-        <span>{{ user.login_email }}</span>
-      </div>
-      <form method="post" action="/auth/logout">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="btn btn-quiet btn-small" type="submit">Sign out</button>
-      </form>
+    <div class="nav-top">
+      <a class="brand" href="/">Secu<span>reddy</span></a>
+      <input type="checkbox" id="nav-toggle" class="nav-toggle sr-only">
+      <label for="nav-toggle" class="nav-toggle-btn"><span class="nav-burger" aria-hidden="true"></span><span>Menu</span></label>
+      <nav class="nav-links">
+        <ul>
+          {% for href, label in nav_items %}
+          <li>
+            <a href="{{ href }}"{% if current_path == href or (href != '/' and current_path.startswith(href)) %} aria-current="page"{% endif %}>{{ icon(NAV_ICONS.get(href, "dot"), "nav-ico") }}<span>{{ label }}</span></a>
+          </li>
+          {% endfor %}
+        </ul>
+        <div class="nav-foot">
+          <div class="nav-user">
+            <strong>{{ user.display_name }}</strong>
+            <span>{{ user.login_email }}</span>
+          </div>
+          <form method="post" action="/auth/logout">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn btn-quiet btn-small" type="submit">Sign out</button>
+          </form>
+        </div>
+      </nav>
     </div>
   </aside>
 {% endif %}
-  <main id="main" class="content{% if not user %} content-centered{% endif %}">
+  <main id="main" class="content{% if not user %} content-centered{% endif %}{% block main_class %}{% endblock %}">
     {% if flashes %}
     <div class="flashes" aria-live="polite">
       {% for f in flashes %}
@@ -52,5 +57,6 @@
 </div>
 {% endif %}
 <script src="/static/app.js" defer></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

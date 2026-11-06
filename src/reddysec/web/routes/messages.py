@@ -20,7 +20,7 @@ from reddysec.store.models import MailboxRow, MessageRow, UserRow
 
 from .. import presenters, queries
 from ..auth import current_user
-from ..security import flash
+from ..security import flash, safe_return_to
 from ..templating import render
 from . import protected_router
 
@@ -134,6 +134,8 @@ async def message_report(
         return artifact_url(ref) + "&download=1"
 
     report = presenters.build_report(message, artifact_url=artifact_url, download_url=download_url)
+    async with request.app.state.db.session() as session:
+        reasons = await queries.latest_reasons(session, [message.id])
     return render(
         request,
         "message.html",
@@ -142,6 +144,11 @@ async def message_report(
             "mailbox": mailbox,
             "report": report,
             "is_staff": queries.is_staff(user),
+            "decision_note": presenters.decision_note(reasons.get(message.id), report.client_decision),
+            "flagged": bool(message.quarantined or (message.level or "unknown") != "safe"),
+            "safe_reasons": presenters.SAFE_REASON_CHOICES,
+            "fake_reasons": presenters.FAKE_REASON_CHOICES,
+            "assistant_enabled": request.app.state.assistant.enabled,
         },
     )
 
@@ -176,22 +183,44 @@ async def message_review(
 
 
 @router.post("/messages/{message_id}/safe", name="message_safe")
-async def message_safe(request: Request, message_id: str, user: UserRow = Depends(current_user)) -> Response:
-    """"This is safe - I know this sender"."""
-    return await _sender_decision(request, message_id, user, "safe")
+async def message_safe(
+    request: Request,
+    message_id: str,
+    reason_code: str = Form(""),
+    reason_text: str = Form(""),
+    next: str = Form(""),  # noqa: A002 - the public form field name
+    user: UserRow = Depends(current_user),
+) -> Response:
+    """"Not suspicious? Mark as safe", with an optional reason."""
+    return await _sender_decision(request, message_id, user, "safe", reason_code, reason_text, next)
 
 
 @router.post("/messages/{message_id}/fake", name="message_fake")
-async def message_fake(request: Request, message_id: str, user: UserRow = Depends(current_user)) -> Response:
-    """"This is fake"."""
-    return await _sender_decision(request, message_id, user, "fake")
+async def message_fake(
+    request: Request,
+    message_id: str,
+    reason_code: str = Form(""),
+    reason_text: str = Form(""),
+    next: str = Form(""),  # noqa: A002 - the public form field name
+    user: UserRow = Depends(current_user),
+) -> Response:
+    """"This is fake", with an optional reason."""
+    return await _sender_decision(request, message_id, user, "fake", reason_code, reason_text, next)
 
 
-async def _sender_decision(request: Request, message_id: str, user: UserRow, decision: str) -> Response:
+async def _sender_decision(
+    request: Request, message_id: str, user: UserRow, decision: str, reason_code: str, reason_text: str, next_url: str
+) -> Response:
+    try:
+        code, text = queries.clean_reason(decision, reason_code, reason_text)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Please pick one of the reasons offered.") from exc
     async with request.app.state.db.session() as session:
         message, mailbox = await _get_or_404(session, user, message_id)
         try:
-            result = await queries.record_sender_decision(session, user, message, mailbox, decision)
+            result = await queries.record_sender_decision(
+                session, user, message, mailbox, decision, reason_code=code, reason_text=text
+            )
         except ValueError as exc:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, detail="We cannot tell who sent this email, so there is no sender to remember."
@@ -199,11 +228,16 @@ async def _sender_decision(request: Request, message_id: str, user: UserRow, dec
         sender = message.from_address
     # "info" flashes stay until dismissed: this one explains what will change.
     flash(request, presenters.decision_flash(result, sender=sender), "info")
-    return _see_other(f"/messages/{message_id}")
+    return _see_other(safe_return_to(next_url, f"/messages/{message_id}"))
 
 
 @router.post("/messages/{message_id}/recheck", name="message_recheck")
-async def message_recheck(request: Request, message_id: str, user: UserRow = Depends(current_user)) -> Response:
+async def message_recheck(
+    request: Request,
+    message_id: str,
+    next: str = Form(""),  # noqa: A002 - the public form field name
+    user: UserRow = Depends(current_user),
+) -> Response:
     """"Check again": re-analyse with today's rules and the client's choices."""
     async with request.app.state.db.session() as session:
         message, mailbox = await _get_or_404(session, user, message_id)
@@ -212,7 +246,7 @@ async def message_recheck(request: Request, message_id: str, user: UserRow = Dep
         flash(request, "We are checking this email again with our latest rules. Refresh this page in a minute.")
     else:
         flash(request, "This email is already being checked. Refresh this page in a minute.", "warn")
-    return _see_other(f"/messages/{message_id}")
+    return _see_other(safe_return_to(next, f"/messages/{message_id}"))
 
 
 @router.post("/messages/{message_id}/feedback", name="message_feedback")

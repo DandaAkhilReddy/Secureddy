@@ -9,6 +9,7 @@ lay them out.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -17,15 +18,19 @@ from typing import Any
 from pydantic import ValidationError
 
 from reddysec.models import Role, Verdict
-from reddysec.store.models import AuditLog, MailboxRow, MessageRow, UserRow
+from reddysec.store.models import AuditLog, FeedbackReasonRow, MailboxRow, MessageRow, UserRow
 
 from .queries import (
+    FAKE_REASONS,
     IN_FLIGHT_STATES,
     PENDING_REQUEST_STATES,
+    SAFE_REASONS,
     STATE_RESTORE_REQUESTED,
     STATE_REVIEWED,
+    DailyCounts,
     SenderDecision,
     WeeklyCounts,
+    reason_label,
     verified_sender_domain,
 )
 
@@ -181,9 +186,108 @@ def humanize_ago(value: datetime | None, now: datetime | None = None) -> str:
     return format_dt(value)
 
 
+def ago_short(value: datetime | None, now: datetime | None = None) -> str:
+    """Compact relative time for dense lists: "just now", "5 min ago", "2 h ago", "3 d ago"."""
+    if value is None:
+        return ""
+    value = as_utc(value)
+    seconds = int(((now or datetime.now(UTC)) - value).total_seconds())
+    if seconds < 0:
+        return short_date(value)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60} min ago"
+    if seconds < 86400:
+        return f"{seconds // 3600} h ago"
+    if seconds < 7 * 86400:
+        return f"{seconds // 86400} d ago"
+    return short_date(value)
+
+
+def short_date(value: datetime | None) -> str:
+    """"6 Nov" (same year) or "6 Nov 2025"."""
+    if value is None:
+        return ""
+    value = as_utc(value)
+    if value.year == datetime.now(UTC).year:
+        return f"{value.day} {value:%b}"
+    return f"{value.day} {value:%b %Y}"
+
+
+def initials(name: str | None, address: str | None = None) -> str:
+    """Two letters for the sender avatar: "Walmart.com" -> "W", "Ana Ruiz" -> "AR"."""
+    words = [w for w in (name or "").replace(".", " ").replace("_", " ").split() if w[:1].isalnum()]
+    if len(words) >= 2:
+        return (words[0][0] + words[1][0]).upper()
+    if words:
+        return words[0][0].upper()
+    local = (address or "").split("@", 1)[0]
+    return (local[:1] or "?").upper()
+
+
+AVATAR_TONES = 6
+
+
+def avatar_tone(seed: str | None) -> str:
+    """A stable, quiet colour class per sender so the list is easy to scan."""
+    total = sum(ord(ch) for ch in (seed or "").lower())
+    return f"av-{total % AVATAR_TONES}"
+
+
 # --------------------------------------------------------------------------
 # Dashboard copy
 # --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Hero:
+    """The big line at the top of the dashboard."""
+
+    title: str
+    tone: str  # ok | warn | bad | grey
+
+
+def hero(counts: WeeklyCounts, *, has_mailboxes: bool) -> Hero:
+    if not has_mailboxes:
+        return Hero("Let's get your inbox protected", "grey")
+    need = counts.suspicious + counts.quarantined
+    if counts.quarantined and need:
+        return Hero(f"{_n(need, 'email')} need{'s' if need == 1 else ''} a look", "bad")
+    if need:
+        return Hero(f"{_n(need, 'email')} need{'s' if need == 1 else ''} a look", "warn")
+    return Hero("Your inbox is safe", "ok")
+
+
+@dataclass(frozen=True)
+class Sparkline:
+    """A tiny server-rendered line chart. Coordinates are SVG user units in a
+    ``0 0 width height`` view box; ``label`` is the text alternative."""
+
+    points: str
+    area: str
+    last_x: str
+    last_y: str
+    label: str
+    width: int
+    height: int
+
+
+def sparkline(values: tuple[int, ...] | list[int], days: tuple[datetime, ...] = (), *,
+              width: int = 112, height: int = 32, pad: int = 3) -> Sparkline:
+    vals = list(values) or [0]
+    top = max(vals) or 1
+    step = (width - 2 * pad) / max(1, len(vals) - 1)
+    coords = [(pad + i * step, height - pad - (v / top) * (height - 2 * pad)) for i, v in enumerate(vals)]
+    pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    area = f"M{coords[0][0]:.1f},{height - pad} L" + " L".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    area += f" L{coords[-1][0]:.1f},{height - pad} Z"
+    if days and len(days) == len(vals):
+        detail = ", ".join(f"{d:%a} {v}" for d, v in zip(days, vals, strict=True))
+    else:
+        detail = ", ".join(str(v) for v in vals)
+    return Sparkline(pts, area, f"{coords[-1][0]:.1f}", f"{coords[-1][1]:.1f}",
+                     f"Last {len(vals)} days: {detail}", width, height)
 
 
 def _n(count: int, noun: str) -> str:
@@ -219,24 +323,32 @@ class StatCard:
     href: str
     tone: str  # ok | warn | bad
     aria: str
+    spark: Sparkline | None = None
 
 
-def stat_cards(counts: WeeklyCounts) -> list[StatCard]:
+def stat_cards(counts: WeeklyCounts, daily: DailyCounts | None = None) -> list[StatCard]:
     """The three numbers on the home page. Each one opens the matching list.
-    The lists show the same 7 days the numbers count."""
+    The lists show the same 7 days the numbers count; ``daily`` adds a
+    sparkline of those days."""
 
     def hint(n: int) -> str:
         return "Tap to see why" if n else "Nothing here this week"
 
+    def spark(values: tuple[int, ...] | None) -> Sparkline | None:
+        return sparkline(values, daily.days) if daily is not None and values is not None else None
+
     return [
         StatCard("Checked", counts.safe, "Looked fine. Tap to see them" if counts.safe else hint(0),
-                 "/messages?level=safe&days=7", "ok", f"{_n(counts.safe, 'email')} checked and fine this week"),
+                 "/messages?level=safe&days=7", "ok", f"{_n(counts.safe, 'email')} checked and fine this week",
+                 spark(daily.safe if daily else None)),
         StatCard("Suspicious", counts.suspicious, hint(counts.suspicious),
                  "/messages?level=suspicious&days=7", "warn",
-                 f"{counts.suspicious} suspicious this week. See which emails and why"),
+                 f"{counts.suspicious} suspicious this week. See which emails and why",
+                 spark(daily.suspicious if daily else None)),
         StatCard("In Quarantine", counts.quarantined, hint(counts.quarantined),
                  "/messages?filter=quarantined&days=7", "bad",
-                 f"{counts.quarantined} in Quarantine this week. See which emails and why"),
+                 f"{counts.quarantined} in Quarantine this week. See which emails and why",
+                 spark(daily.quarantined if daily else None)),
     ]
 
 
@@ -335,6 +447,7 @@ ACTION_PHRASES = {
     "rescore_failed": "Could not check an email again",
     "client_quarantine": "Moved an email to Quarantine for you",
     "client_mark_safe": "Marked an email Checked for you",
+    "assistant_question": "Asked Secureddy a question",
 }
 
 
@@ -369,7 +482,11 @@ def detail_phrase(entry: AuditLog) -> str:
         return str(d["note"])
     if entry.action == "client_feedback":
         return "Marked as fine" if d.get("feedback") == "fine" else "Marked as bad"
-    if entry.action in ("sender_trusted", "sender_blocked", "sender_feedback_removed") and d.get("value"):
+    if entry.action in ("sender_trusted", "sender_blocked") and d.get("value"):
+        decision = "safe" if entry.action == "sender_trusted" else "fake"
+        why = _reason_words(decision, str(d.get("reason_code") or ""), str(d.get("reason") or ""))
+        return f"{d['value']} · {why}" if why else str(d["value"])
+    if entry.action == "sender_feedback_removed" and d.get("value"):
         return str(d["value"])
     if entry.action == "sender_feedback_removed":
         return str(entry.target or "")
@@ -736,6 +853,46 @@ def list_reason(message: MessageRow) -> str:
     return short_reason(top, sender=sender, verified_domain=verified) + "."
 
 
+# --------------------------------------------------------------------------
+# Reasons the client gave ("Not suspicious?" / "This is fake")
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReasonChoice:
+    code: str
+    label: str
+
+
+SAFE_REASON_CHOICES = tuple(ReasonChoice(k, v) for k, v in SAFE_REASONS.items())
+FAKE_REASON_CHOICES = tuple(ReasonChoice(k, v) for k, v in FAKE_REASONS.items())
+
+
+def _reason_words(decision: str, code: str, text: str) -> str:
+    label = reason_label(decision, code) if code != "other" else ""
+    if label and text:
+        return f"{label}. {text}"
+    return text or label
+
+
+def reason_sentence(row: FeedbackReasonRow) -> str:
+    """The client's reason in one line: "I ordered this / expected it" plus
+    their own words, if any. Rendered escaped by the templates."""
+    return _reason_words(row.decision, row.reason_code or "", row.reason_text or "")
+
+
+def decision_note(row: FeedbackReasonRow | None, decision: str) -> str:
+    """"You marked this safe on 6 Nov: I ordered this / expected it." for the report."""
+    if row is None or row.decision != decision:
+        return ""
+    words = reason_sentence(row)
+    what = "safe" if decision == "safe" else "fake"
+    when = short_date(row.created_at)
+    if not words:
+        return f"You marked this {what} on {when}."
+    return f"You marked this {what} on {when}: {words.rstrip('.')}."
+
+
 def decision_flash(result: SenderDecision, *, sender: str) -> str:
     """What the client reads right after "This is safe" / "This is fake"."""
     what = result.value
@@ -793,10 +950,36 @@ class MessageListRow:
     chip: Chip
     summary: str
     reason: str = ""
+    initials: str = ""
+    avatar: str = "av-0"
+    can_mark_safe: bool = False
+    can_mark_fake: bool = False
+
+
+def row_actions(message: MessageRow) -> tuple[bool, bool]:
+    """(can say "Not suspicious?", can say "This is fake") for a list row.
+    Offered on every message that is not plainly Checked, unless the worker
+    is busy with it or the client already said the same thing."""
+    busy = message.state in IN_FLIGHT_STATES or message.state in PENDING_REQUEST_STATES
+    if busy or not (message.from_address or "").strip():
+        return False, False
+    decision = client_decision(message)
+    flagged = message.quarantined or (message.level or "unknown") != "safe"
+    # A quarantined email is already held back; "This is fake" stays on its report.
+    return (flagged and decision != "safe"), (flagged and decision != "fake" and not message.quarantined)
 
 
 def list_rows(pairs: list[tuple[MessageRow, MailboxRow]]) -> list[MessageListRow]:
-    return [MessageListRow(m, mb, verdict_chip(m), message_summary(m), list_reason(m)) for m, mb in pairs]
+    rows = []
+    for m, mb in pairs:
+        safe, fake = row_actions(m)
+        rows.append(
+            MessageListRow(
+                m, mb, verdict_chip(m), message_summary(m), list_reason(m),
+                initials(m.from_name, m.from_address), avatar_tone(m.from_address or m.from_name), safe, fake,
+            )
+        )
+    return rows
 
 
 @dataclass(frozen=True)
@@ -1423,3 +1606,45 @@ def signal_copy(signal: Any, *, sender: str = "", verified_domain: str = "") -> 
 def short_reason(signal: Any, *, sender: str = "", verified_domain: str = "") -> str:
     """The one-line reason used in message lists."""
     return signal_copy(signal, sender=sender, verified_domain=verified_domain).title
+
+
+# --------------------------------------------------------------------------
+# Assistant replies: a tiny, safe subset of markdown
+# --------------------------------------------------------------------------
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*•]|\d{1,2}[.)])\s+(.*)$")
+
+
+def _segments(line: str) -> list[dict[str, Any]]:
+    """Split ``**bold**`` runs out of one line. Unmatched markers stay text."""
+    parts = line.split("**")
+    if len(parts) % 2 == 0:  # an odd number of markers: show them literally
+        return [{"b": False, "t": line}]
+    return [{"b": i % 2 == 1, "t": part} for i, part in enumerate(parts) if part]
+
+
+def chat_blocks(text: str) -> list[dict[str, Any]]:
+    """Paragraphs (with line breaks), bullet or numbered lists, and bold.
+    Templates render the result with autoescaping; nothing here is HTML.
+    ``static/assistant.js`` applies the same rules with DOM calls."""
+    blocks: list[dict[str, Any]] = []
+    for chunk in [c for c in text.replace("\r\n", "\n").split("\n\n") if c.strip()]:
+        current: dict[str, Any] | None = None
+        for raw in chunk.split("\n"):
+            if not raw.strip():
+                continue
+            item = _LIST_ITEM.match(raw)
+            if item:
+                ordered = raw.strip()[0].isdigit()
+                kind = "ol" if ordered else "ul"
+                if current is None or current["type"] != kind:
+                    current = {"type": kind, "items": []}
+                    blocks.append(current)
+                current["items"].append(_segments(item.group(1).strip()))
+            else:
+                line = raw.strip().lstrip("#").strip()
+                if current is None or current["type"] != "p":
+                    current = {"type": "p", "lines": []}
+                    blocks.append(current)
+                current["lines"].append(_segments(line))
+    return blocks

@@ -15,6 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SandboxBackendName = Literal["local", "docker", "aci"]
 LlmProvider = Literal["none", "anthropic", "azure_foundry", "azure_openai", "openai"]
+# "" means "follow llm_provider" (and "none" when that is unset too).
+AssistantProvider = Literal["", "none", "anthropic", "azure_foundry", "azure_openai"]
+DEFAULT_ASSISTANT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 
 
 class Settings(BaseSettings):
@@ -73,6 +76,15 @@ class Settings(BaseSettings):
     azure_openai_api_key: SecretStr = SecretStr("")
     azure_openai_deployment: str = ""
 
+    # --- "Ask Secureddy" in-app assistant ---------------------------------
+    # Reuses the keys above. Empty provider = follow llm_provider. The model
+    # defaults per provider: claude-sonnet-4-5 for Anthropic, the Foundry model
+    # or the Azure OpenAI deployment otherwise.
+    assistant_provider: AssistantProvider = ""
+    assistant_model: str = ""
+    assistant_max_turns: int = 6  # tool rounds per question
+    assistant_daily_message_limit: int = 200  # questions per user per UTC day
+
     # --- hold mode safety ------------------------------------------------
     # If the pipeline has not heart-beaten for this long, release all held mail.
     hold_dead_man_minutes: int = 10
@@ -96,6 +108,24 @@ class Settings(BaseSettings):
     @property
     def google_redirect_uri(self) -> str:
         return self.base_url.rstrip("/") + self.google_redirect_path
+
+    @property
+    def effective_assistant_provider(self) -> str:
+        """The assistant's provider after following ``llm_provider`` when unset."""
+        if self.assistant_provider:
+            return self.assistant_provider
+        provider = self.llm_provider
+        return "azure_openai" if provider == "openai" else provider
+
+    @property
+    def effective_assistant_model(self) -> str:
+        if self.assistant_model:
+            return self.assistant_model
+        return {
+            "anthropic": DEFAULT_ASSISTANT_ANTHROPIC_MODEL,
+            "azure_foundry": self.azure_foundry_model,
+            "azure_openai": self.azure_openai_deployment,
+        }.get(self.effective_assistant_provider, "")
 
     @property
     def is_prod(self) -> bool:

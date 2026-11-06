@@ -1,14 +1,16 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, sender with context %}
+{% from "_macros.html" import chip, icon, avatar, decide_forms, empty_art, csrf with context %}
 {% block title %}Home · Secureddy{% endblock %}
 {% block content %}
-<header class="page-head">
-  <h1>Welcome back, {{ first_name }}.</h1>
+<header class="hero hero-{{ hero.tone }}">
+  <p class="eyebrow">Welcome back, {{ first_name }}.</p>
+  <h1 class="hero-title"><span class="status-dot" aria-hidden="true"></span>{{ hero.title }}</h1>
   <p class="lede">{{ sentence }}</p>
 </header>
 
 {% if show_empty_state %}
-<section class="card empty">
+<section class="card empty empty-setup">
+  {{ empty_art("shield") }}
   <h2>Three steps and you are protected</h2>
   <ol class="steps">
     <li>
@@ -24,7 +26,7 @@
       <span>Every link and file is opened on our servers first. You read the verdict here, in plain words.</span>
     </li>
   </ol>
-  <div class="actions">
+  <div class="actions actions-wrap">
     {% if google_login_enabled %}
     <a class="btn btn-primary" href="/auth/google/start?next=/mailboxes">Connect Gmail</a>
     {% endif %}
@@ -38,9 +40,21 @@
     {% for card in stat_cards %}
     <li>
       <a class="stat stat-link stat-{{ card.tone }}" href="{{ card.href }}" aria-label="{{ card.aria }}">
-        <span class="stat-value">{{ card.count }}</span>
-        <span class="stat-label">{{ card.label }}</span>
-        <span class="stat-hint">{{ card.hint }} <span aria-hidden="true">&rarr;</span></span>
+        <span class="stat-top">
+          <span class="stat-label">{{ icon(card.tone, "stat-ico") }}{{ card.label }}</span>
+          <span class="stat-period">7 days</span>
+        </span>
+        <span class="stat-row">
+          <span class="stat-value">{{ card.count }}</span>
+          {% if card.spark %}
+          <svg class="spark" viewBox="0 0 {{ card.spark.width }} {{ card.spark.height }}" width="{{ card.spark.width }}" height="{{ card.spark.height }}" role="img" aria-label="{{ card.spark.label }}" focusable="false">
+            <path class="spark-area" d="{{ card.spark.area }}"/>
+            <polyline class="spark-line" points="{{ card.spark.points }}"/>
+            <circle class="spark-dot" cx="{{ card.spark.last_x }}" cy="{{ card.spark.last_y }}" r="2.5"/>
+          </svg>
+          {% endif %}
+        </span>
+        <span class="stat-hint">{{ card.hint }} {{ icon("arrow", "ico ico-sm") }}</span>
       </a>
     </li>
     {% endfor %}
@@ -48,77 +62,105 @@
 </section>
 {% endif %}
 
-{% if mailboxes %}
-<section class="card">
-  <div class="card-head">
-    <h2>Your mailboxes</h2>
-    <a class="link" href="/mailboxes">Manage</a>
-  </div>
-  <ul class="mailbox-list">
-    {% for m in mailboxes %}
-    <li class="mailbox-row">
-      <div>
-        <strong>{{ m.row.address }}</strong>
-        <span class="muted">{{ m.row.provider | provider }}</span>
+<div class="dash-grid">
+  <div class="dash-main">
+    {% if recent %}
+    <section class="card card-flush" aria-labelledby="recent-title">
+      <div class="card-head card-head-pad">
+        <h2 id="recent-title">Recent email</h2>
+        <a class="link" href="/messages">See all</a>
       </div>
-      <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
-    </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
-
-{% if notifications %}
-<section class="card">
-  <div class="card-head">
-    <h2>Needs your attention</h2>
-    <a class="link" href="/notifications">All notices</a>
-  </div>
-  <ul class="notice-list">
-    {% for n in notifications %}
-    <li>
-      <div class="notice-title">{{ n.title }}</div>
-      <p class="muted">{{ n.body }}</p>
-      <div class="meta">
-        <time datetime="{{ n.created_at.isoformat() }}" title="{{ n.created_at | dt }}">{{ n.created_at | ago }}</time>
-        {% if n.message_id %}<a class="link" href="/messages/{{ n.message_id }}">Open the report</a>{% endif %}
-      </div>
-    </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
-
-{% if recent %}
-<section class="card">
-  <div class="card-head">
-    <h2>Recent email</h2>
-    <a class="link" href="/messages">See all</a>
-  </div>
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr><th>When</th><th>From</th><th>Subject</th><th>Verdict</th><th class="col-hide-sm">Lane</th><th><span class="sr-only">Report</span></th></tr>
-      </thead>
-      <tbody>
+      <ul class="mlist">
         {% for r in recent %}
-        <tr>
-          <td><time datetime="{{ r.message.received_at.isoformat() }}" title="{{ r.message.received_at | dt }}">{{ r.message.received_at | ago }}</time></td>
-          <td>{{ sender(r.message) }}</td>
-          <td class="col-subject">{{ r.message.subject or "(no subject)" }}</td>
-          <td>{{ chip(r.chip) }}</td>
-          <td class="col-hide-sm muted">{{ r.message.lane | lane }}</td>
-          <td><a class="link" href="/messages/{{ r.message.id }}">Report</a></td>
-        </tr>
+        <li class="mrow">
+          <a class="mrow-link" href="/messages/{{ r.message.id }}">
+            {{ avatar(r.initials, r.avatar) }}
+            <span class="mrow-main">
+              <span class="mrow-top">
+                <strong class="mrow-from">{{ r.message.from_name or r.message.from_address or "Unknown sender" }}</strong>
+                <time datetime="{{ r.message.received_at.isoformat() }}" title="{{ r.message.received_at | dt }}">{{ r.message.received_at | ago_short }}</time>
+              </span>
+              <span class="mrow-subject">{{ r.message.subject or "(no subject)" }}</span>
+              <span class="mrow-reason">{{ r.reason or r.summary }}{% if r.message.lane %} <span class="mrow-lane">&middot; {{ r.message.lane | lane }}</span>{% endif %}</span>
+            </span>
+            <span class="mrow-chip">{{ chip(r.chip) }}</span>
+          </a>
+          {% if r.can_mark_safe or r.can_mark_fake %}
+          <div class="mrow-actions">{{ decide_forms(r.message.id, r.can_mark_safe, r.can_mark_fake, next="/", compact=True) }}</div>
+          {% endif %}
+        </li>
         {% endfor %}
-      </tbody>
-    </table>
+      </ul>
+    </section>
+    {% elif not show_empty_state %}
+    <section class="card empty">
+      {{ empty_art("inbox") }}
+      <h2>No email checked yet</h2>
+      <p class="muted">Your mailbox is connected. The first verdicts appear here within a minute of new email arriving.</p>
+    </section>
+    {% endif %}
   </div>
-</section>
-{% elif not show_empty_state %}
-<section class="card empty">
-  <h2>No email checked yet</h2>
-  <p class="muted">Your mailbox is connected. The first verdicts appear here within a minute of new email arriving.</p>
-</section>
-{% endif %}
+
+  <aside class="dash-side">
+    <section class="card ask-card" aria-labelledby="ask-title">
+      <h2 id="ask-title">{{ icon("chat", "ico ico-title") }}Ask Secureddy</h2>
+      <p class="muted small">Ask about your email in plain words. {% if not assistant_enabled %}The assistant isn't switched on yet.{% endif %}</p>
+      <form method="post" action="/assistant/send" class="ask-form">
+        {{ csrf() }}
+        <label class="sr-only" for="ask-input">Your question</label>
+        <div class="ask-row">
+          <input class="input" id="ask-input" type="text" name="message" maxlength="2000" placeholder="What's suspicious this week?" autocomplete="off">
+          <button class="btn btn-primary btn-icon" type="submit" aria-label="Ask">{{ icon("send") }}</button>
+        </div>
+      </form>
+      <form method="post" action="/assistant/send" class="suggest-list">
+        {{ csrf() }}
+        {% for q in suggestions %}
+        <button class="suggest" type="submit" name="message" value="{{ q }}">{{ q }}</button>
+        {% endfor %}
+      </form>
+    </section>
+
+    {% if notifications %}
+    <section class="card">
+      <div class="card-head">
+        <h2>Needs your attention</h2>
+        <a class="link" href="/notifications">All notices</a>
+      </div>
+      <ul class="notice-list">
+        {% for n in notifications %}
+        <li>
+          <div class="notice-title">{{ n.title }}</div>
+          <p class="muted small">{{ n.body }}</p>
+          <div class="meta">
+            <time datetime="{{ n.created_at.isoformat() }}" title="{{ n.created_at | dt }}">{{ n.created_at | ago }}</time>
+            {% if n.message_id %}<a class="link" href="/messages/{{ n.message_id }}">Open the report</a>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if mailboxes %}
+    <section class="card">
+      <div class="card-head">
+        <h2>Your mailboxes</h2>
+        <a class="link" href="/mailboxes">Manage</a>
+      </div>
+      <ul class="mailbox-list">
+        {% for m in mailboxes %}
+        <li class="mailbox-row">
+          <div class="mailbox-id">
+            <strong>{{ m.row.address }}</strong>
+            <span class="muted">{{ m.row.provider | provider }}</span>
+          </div>
+          <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </aside>
+</div>
 {% endblock %}

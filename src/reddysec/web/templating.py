@@ -21,9 +21,19 @@ from . import presenters
 from .queries import is_staff
 from .security import csrf_token, pop_flashes
 
-NAV_ITEMS: tuple[tuple[str, str], ...] = (("/", "Home"), ("/mailboxes", "Mailboxes"), ("/audit", "Audit"))
+NAV_ITEMS: tuple[tuple[str, str], ...] = (
+    ("/", "Home"),
+    ("/messages", "Email"),
+    ("/assistant", "Ask Secureddy"),
+    ("/mailboxes", "Mailboxes"),
+    ("/audit", "Audit"),
+)
 STAFF_NAV_ITEMS: tuple[tuple[str, str], ...] = (("/concierge", "Concierge"),)
 SETTINGS_NAV_ITEM: tuple[str, str] = ("/settings/security", "Settings")
+NAV_ICONS = {
+    "/": "home", "/messages": "mail", "/assistant": "chat", "/mailboxes": "inbox", "/audit": "list",
+    "/concierge": "users", "/settings/security": "settings",
+}
 
 
 def package_path(name: str) -> Path:
@@ -67,9 +77,14 @@ def build_templates() -> Jinja2Templates:
     )
     env.filters["dt"] = presenters.format_dt
     env.filters["ago"] = presenters.humanize_ago
+    env.filters["ago_short"] = presenters.ago_short
+    env.filters["short_date"] = presenters.short_date
     env.filters["provider"] = presenters.provider_label
     env.filters["lane"] = presenters.lane_short
     env.filters["action_phrase"] = presenters.action_phrase
+    env.globals["SAFE_REASONS"] = presenters.SAFE_REASON_CHOICES
+    env.globals["FAKE_REASONS"] = presenters.FAKE_REASON_CHOICES
+    env.globals["NAV_ICONS"] = NAV_ICONS
     return Jinja2Templates(env=env, context_processors=[_context_processor])
 
 

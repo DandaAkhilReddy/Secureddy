@@ -218,3 +218,54 @@ class AuditLog(Base):
     target: Mapped[str | None] = mapped_column(String(200), nullable=True)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class FeedbackReasonRow(Base):
+    """Why the client said "This is safe" / "This is fake" about one message.
+
+    A new table, not new columns on ``sender_feedback``, for the same
+    ``create_all`` reason. ``sender_feedback_id`` points at the sender entry
+    the click created or updated (it may later be removed from the Mailboxes
+    page, so it is a plain nullable id, not a foreign key). The reason never
+    changes the trust math; it is shown to the client, the concierge and the
+    audit log. ``reason_text`` is the client's own words, at most 500
+    characters, and is always rendered escaped.
+    """
+
+    __tablename__ = "feedback_reasons"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    sender_feedback_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    message_id: Mapped[str] = mapped_column(String(40), index=True)
+    user_id: Mapped[str] = mapped_column(String(40), index=True)
+    decision: Mapped[str] = mapped_column(String(10))  # safe | fake
+    reason_code: Mapped[str] = mapped_column(String(30), default="")
+    reason_text: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AssistantConversationRow(Base):
+    """One "Ask Secureddy" chat. Only its owner can read it."""
+
+    __tablename__ = "assistant_conversations"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="New conversation")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AssistantMessageRow(Base):
+    """One entry of a chat: ``user`` (the question), ``assistant`` (a reply or
+    a tool request) or ``tool`` (what our read-only tools returned)."""
+
+    __tablename__ = "assistant_messages"
+    __table_args__ = (Index("ix_assistant_messages_conv_seq", "conversation_id", "seq"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(40), ForeignKey("assistant_conversations.id"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)  # order inside the conversation
+    role: Mapped[str] = mapped_column(String(10))  # user | assistant | tool
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

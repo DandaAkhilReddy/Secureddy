@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, csrf, proposal_card, empty_art with context %}
+{% block title %}{{ conversation.title if conversation else "Ask Secureddy" }} · Secureddy{% endblock %}
+{% block main_class %} content-chat{% endblock %}
+{% block content %}
+<div class="chat-layout">
+  <aside class="chat-side" aria-label="Your conversations">
+    <form method="post" action="/assistant/new">
+      {{ csrf() }}
+      <button class="btn btn-quiet btn-block" type="submit">{{ icon("plus") }}<span>New conversation</span></button>
+    </form>
+    {% if conversations %}
+    <ul class="conv-list">
+      {% for c in conversations %}
+      <li>
+        <a class="conv-link" href="/assistant/{{ c.id }}"{% if conversation and conversation.id == c.id %} aria-current="page"{% endif %}>
+          <span class="conv-title">{{ c.title }}</span>
+          <time datetime="{{ c.updated_at.isoformat() }}">{{ c.updated_at | ago_short }}</time>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted small conv-empty">Your conversations will appear here.</p>
+    {% endif %}
+  </aside>
+
+  <section class="chat-main" aria-labelledby="chat-title">
+    <header class="chat-head">
+      <h1 id="chat-title">{{ conversation.title if conversation else "Ask Secureddy" }}</h1>
+      <p class="muted small">I can see your verdicts and reports, not the text of your email. I suggest; you decide.</p>
+    </header>
+
+    {% if not enabled %}
+    <div class="card empty chat-off">
+      {{ empty_art("chat") }}
+      <h2>The assistant isn't switched on yet</h2>
+      <p class="muted">Your email is still checked and labelled as usual. Once your Secureddy team turns the assistant on, you can ask it questions here.</p>
+    </div>
+    {% else %}
+    <ol class="chat-log" id="chat-log" aria-live="polite" aria-relevant="additions">
+      {% if not bubbles %}
+      <li class="bubble bubble-assistant bubble-welcome">
+        <span class="bubble-who">{{ icon("shield-check", "ico") }}Secureddy</span>
+        <div class="bubble-body">
+          {% if about %}
+          <p>Ask me anything about <strong>{{ about.subject or "(no subject)" }}</strong> from {{ about.from_name or about.from_address or "an unknown sender" }}.</p>
+          {% else %}
+          <p>Hello. I can tell you what looks suspicious, why an email was flagged, and what to do about it.</p>
+          {% endif %}
+        </div>
+      </li>
+      {% endif %}
+      {% for b in bubbles %}
+      <li class="bubble bubble-{{ b.role }}{% if b.failed %} bubble-failed{% endif %}" id="{{ b.id }}">
+        {% if b.role == "assistant" %}<span class="bubble-who">{{ icon("shield-check", "ico") }}Secureddy</span>{% endif %}
+        {% if b.role == "user" and b.about_label %}<span class="bubble-about">About: {{ b.about_label }}</span>{% endif %}
+        <div class="bubble-body">
+          {% if b.role == "user" %}
+          <p>{{ b.text }}</p>
+          {% else %}
+          {% for block in b.blocks %}
+            {% if block.type == "p" %}
+            <p>{% for line in block.lines %}{% for seg in line %}{% if seg.b %}<strong>{{ seg.t }}</strong>{% else %}{{ seg.t }}{% endif %}{% endfor %}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>
+            {% else %}
+            <{{ block.type }}>{% for item in block["items"] %}<li>{% for seg in item %}{% if seg.b %}<strong>{{ seg.t }}</strong>{% else %}{{ seg.t }}{% endif %}{% endfor %}</li>{% endfor %}</{{ block.type }}>
+            {% endif %}
+          {% endfor %}
+          {% endif %}
+        </div>
+        {% for p in b.proposals or [] %}{{ proposal_card(p) }}{% endfor %}
+      </li>
+      {% endfor %}
+    </ol>
+    <div class="typing" id="typing" hidden aria-hidden="true"><span></span><span></span><span></span><em>Secureddy is looking&hellip;</em></div>
+
+    {% if not bubbles %}
+    <form method="post" action="/assistant/send" class="suggest-list chat-suggest" data-suggest>
+      {{ csrf() }}
+      {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.id }}">{% endif %}
+      {% if about %}<input type="hidden" name="about" value="{{ about.id }}">{% endif %}
+      {% for q in suggestions %}
+      <button class="suggest" type="submit" name="message" value="{{ q }}">{{ q }}</button>
+      {% endfor %}
+    </form>
+    {% endif %}
+
+    {% if limit_reached %}
+    <p class="flash flash-warn">You have asked a lot of questions today. The assistant will be back tomorrow.</p>
+    {% else %}
+    <form method="post" action="/assistant/send" class="composer" id="composer" data-csrf="{{ csrf_token }}">
+      {{ csrf() }}
+      <input type="hidden" name="conversation_id" value="{{ conversation.id if conversation else '' }}">
+      {% if about %}
+      <input type="hidden" name="about" value="{{ about.id }}">
+      <p class="composer-about">{{ icon("mail") }}<span>About: {{ about.subject or "(no subject)" }}</span></p>
+      {% endif %}
+      <label class="sr-only" for="composer-input">Your question</label>
+      <div class="composer-row">
+        <textarea class="input composer-input" id="composer-input" name="message" rows="1" maxlength="{{ max_chars }}" placeholder="Ask about your email…" required></textarea>
+        <button class="btn btn-primary btn-icon" type="submit" aria-label="Send">{{ icon("send") }}</button>
+      </div>
+      <p class="help composer-help">Enter to send, Shift+Enter for a new line.</p>
+    </form>
+    {% endif %}
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}{% if enabled %}<script src="/static/assistant.js" defer></script>{% endif %}{% endblock %}

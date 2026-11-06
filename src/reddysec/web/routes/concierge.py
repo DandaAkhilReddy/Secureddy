@@ -28,6 +28,7 @@ def _see_other(url: str = "/concierge") -> RedirectResponse:
 async def concierge_page(request: Request, user: UserRow = Depends(staff_only)) -> Response:
     async with request.app.state.db.session() as session:
         queue = await queries.concierge_queue(session)
+        reasons = await queries.latest_reasons(session, [m.id for m, _, _ in queue])
     return render(
         request,
         "concierge.html",
@@ -40,6 +41,9 @@ async def concierge_page(request: Request, user: UserRow = Depends(staff_only)) 
                     "chip": presenters.verdict_chip(m),
                     "summary": presenters.message_summary(m),
                     "request_note": ((m.verdict or {}).get("review_request") or {}).get("note", ""),
+                    "client_reason": presenters.decision_note(
+                        reasons.get(m.id), presenters.client_decision(m)
+                    ).replace("You marked", "Client marked", 1),
                 }
                 for m, mb, owner in queue
             ],

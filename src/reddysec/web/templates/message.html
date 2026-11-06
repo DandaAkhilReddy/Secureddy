@@ -1,42 +1,41 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, csrf, signals, sender with context %}
+{% from "_macros.html" import chip, csrf, signals, sender, icon, decide_forms with context %}
 {% block title %}{{ message.subject or "Email report" }} · Secureddy{% endblock %}
+{% block main_class %} has-mobile-bar{% endblock %}
 {% block content %}
-<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><a href="/messages">Email</a><span>/</span><span>Report</span></nav>
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true">/</span><a href="/messages">Email</a><span aria-hidden="true">/</span><span>Report</span></nav>
 
 {# 1. The verdict, in one sentence #}
-<header class="page-head verdict-head verdict-{{ report.chip.tone }}">
-  <div class="verdict-block">{{ chip(report.chip) }}</div>
-  <h1 class="headline">{{ report.headline }}</h1>
-  <p class="summary">{{ report.summary }}</p>
-  {% if report.note %}<p class="note">{{ report.note }}</p>{% endif %}
-  {% if report.override_note %}<p class="note">Analyst's note: {{ report.override_note }}</p>{% endif %}
-  <p class="muted small report-meta">
-    <span class="report-subject">{{ message.subject or "(no subject)" }}</span> &middot; from {{ sender(message) }} &middot; to {{ mailbox.address }} &middot;
-    <time datetime="{{ message.received_at.isoformat() }}">{{ message.received_at | dt }}</time>
-  </p>
+<header class="verdict-banner verdict-{{ report.chip.tone }}">
+  <div class="verdict-icon" aria-hidden="true">{{ icon(report.chip.tone, "ico ico-xl") }}</div>
+  <div class="verdict-body">
+    <div class="verdict-block">{{ chip(report.chip) }}</div>
+    <h1 class="headline">{{ report.headline }}</h1>
+    <p class="summary">{{ report.summary }}</p>
+    {% if decision_note %}<p class="note note-decision">{{ decision_note }}</p>{% endif %}
+    {% if report.note %}<p class="note">{{ report.note }}</p>{% endif %}
+    {% if report.override_note %}<p class="note">Analyst's note: {{ report.override_note }}</p>{% endif %}
+  </div>
 </header>
+<dl class="mail-meta">
+  <div><dt>Subject</dt><dd class="report-subject">{{ message.subject or "(no subject)" }}</dd></div>
+  <div><dt>From</dt><dd>{{ sender(message) }}</dd></div>
+  <div><dt>To</dt><dd>{{ mailbox.address }}</dd></div>
+  <div><dt>Received</dt><dd><time datetime="{{ message.received_at.isoformat() }}">{{ message.received_at | dt }}</time></dd></div>
+</dl>
 
 {# 4. What you can do (kept near the top: it is what the reader came for) #}
-<section class="card action-bar" aria-labelledby="actions-title">
+<section class="card action-bar" id="decide" aria-labelledby="actions-title">
   <h2 id="actions-title">What do you want to do?</h2>
+  {% if report.can_mark_safe or report.can_mark_fake %}
+  {{ decide_forms(message.id, report.can_mark_safe, report.can_mark_fake, flagged=flagged) }}
+  {% endif %}
   <div class="actions actions-wrap">
-    {% if report.can_mark_safe %}
-    <form method="post" action="/messages/{{ message.id }}/safe">
-      {{ csrf() }}
-      <button class="btn btn-primary" type="submit">This is safe &mdash; I know this sender</button>
-    </form>
-    {% endif %}
-    {% if report.can_mark_fake %}
-    <form method="post" action="/messages/{{ message.id }}/fake" data-confirm="Mark this sender as fake? Their email will go to Quarantine from now on.">
-      {{ csrf() }}
-      <button class="btn btn-danger" type="submit">This is fake</button>
-    </form>
-    {% endif %}
+    <a class="btn btn-quiet" href="/assistant?about={{ message.id }}">{{ icon("chat") }}<span>Ask about this email</span></a>
     {% if report.can_recheck %}
     <form method="post" action="/messages/{{ message.id }}/recheck">
       {{ csrf() }}
-      <button class="btn btn-quiet" type="submit">Check again</button>
+      <button class="btn btn-quiet" type="submit">{{ icon("refresh") }}<span>Check again</span></button>
     </form>
     {% endif %}
     {% if report.can_release %}
@@ -53,7 +52,7 @@
     <button class="btn btn-quiet" type="submit">Ask the concierge to review</button>
   </form>
   {% if report.can_mark_safe or report.can_mark_fake %}
-  <p class="help">"This is safe" teaches us to trust this sender next time. "This is fake" sends their email to Quarantine from now on. You can undo either on the Mailboxes page.</p>
+  <p class="help">"Mark as safe" teaches us to trust this sender next time. "This is fake" sends their email to Quarantine from now on. You can undo either on the Mailboxes page.</p>
   {% endif %}
 </section>
 
@@ -113,12 +112,7 @@
         <code class="url-text">{{ u.url }}</code>
       </div>
       {% if u.final_url %}<p class="muted small">Ends up at <code class="url-text">{{ u.final_url }}</code></p>{% endif %}
-      {% if u.screenshot_url %}
-      <figure class="screenshot">
-        <img src="{{ u.screenshot_url }}" alt="What the page looked like when we opened it in our sandbox" loading="lazy">
-        <figcaption class="muted small">What we saw when we opened it in the sandbox.</figcaption>
-      </figure>
-      {% elif u.detonated %}
+      {% if u.detonated and not u.screenshot_url %}
       <p class="muted small">Opened in our sandbox; no picture was kept.</p>
       {% endif %}
       {% if room_enabled %}
@@ -134,6 +128,22 @@
     </li>
     {% endfor %}
   </ul>
+
+  {% set shots = report.urls | selectattr("screenshot_url") | list %}
+  {% if shots %}
+  <h3 class="sub-title">What the links looked like in our sandbox</h3>
+  <div class="shot-grid">
+    {% for u in shots %}
+    <figure class="screenshot">
+      <img src="{{ u.screenshot_url }}" alt="What the page looked like when we opened it in our sandbox" loading="lazy">
+      <figcaption>
+        {{ chip(u.chip) }}
+        <span class="shot-host">{{ (u.final_url or u.url) | replace("https://", "") | replace("http://", "") | truncate(48, True, "…") }}</span>
+      </figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if report.attachments %}
@@ -161,13 +171,13 @@
   <summary><h2>Technical details</h2></summary>
   <dl class="dl">
     <dt>Report id</dt><dd><code>{{ message.id }}</code></dd>
-    {% if report.score is not none %}<dt>Risk score</dt><dd>{{ report.score }} out of 100</dd>{% endif %}
+    {% if report.score is not none %}<dt>Risk score</dt><dd><span class="num">{{ report.score }}</span> out of 100</dd>{% endif %}
     {% if report.previous_level %}<dt>Before re-check</dt><dd>{{ report.previous_level }}</dd>{% endif %}
     {% if report.lane %}<dt>How we checked</dt><dd>{{ report.lane }}</dd>{% endif %}
     <dt>Sender verified (DMARC)</dt><dd>{{ report.verified_domain or "No" }}</dd>
     {% if report.analyzed_at %}<dt>Checked</dt><dd>{{ report.analyzed_at | dt }}</dd>{% endif %}
-    <dt>Links</dt><dd>{{ message.url_count }}</dd>
-    <dt>Files</dt><dd>{{ message.attachment_count }}</dd>
+    <dt>Links</dt><dd class="num">{{ message.url_count }}</dd>
+    <dt>Files</dt><dd class="num">{{ message.attachment_count }}</dd>
     {% if report.engine_version %}<dt>Engine</dt><dd>{{ report.engine_version }}</dd>{% endif %}
     {% if is_staff %}<dt>State</dt><dd><code>{{ message.state }}</code></dd>{% endif %}
   </dl>
@@ -184,4 +194,11 @@
   {{ signals(a.signals) }}
   {% endfor %}
 </details>
+
+<nav class="mobile-bar" aria-label="Actions for this email">
+  {% if report.can_mark_safe or report.can_mark_fake %}
+  <a class="btn btn-primary btn-small" href="#decide">{{ icon("shield-check") }}<span>{{ "Not suspicious?" if flagged else "Decide" }}</span></a>
+  {% endif %}
+  <a class="btn btn-quiet btn-small" href="/assistant?about={{ message.id }}">{{ icon("chat") }}<span>Ask Secureddy</span></a>
+</nav>
 {% endblock %}
