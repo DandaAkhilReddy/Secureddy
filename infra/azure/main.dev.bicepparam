@@ -54,7 +54,7 @@ param holdDeadManMinutes = 10
 param logLevel = 'DEBUG'
 
 // Integrations (CHANGE when you have them; secrets live in Key Vault)
-param googleClientId = ''
+param googleClientId = '533261991462-713nthol9j37igot6g9r03v62al0vrsb.apps.googleusercontent.com'
 param googlePubsubTopic = ''
 param safeBrowsingEnabled = false
 param azureOpenAiEnabled = false
