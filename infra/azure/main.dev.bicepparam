@@ -93,4 +93,10 @@ param monthlyBudgetUsd = 200
 // CI/CD (CHANGE to your GitHub owner/repo to enable OIDC deploys)
 param githubRepository = 'DandaAkhilReddy/Secureddy'
 
+// Who may use it: free, invite-only, at most 5 people. The owner's account
+// becomes the first admin (Admin -> People to invite the others).
+param bootstrapAdminEmail = 'akhilreddydanda3@gmail.com'
+param maxUsers = 5
+param signupMode = 'invite_only'
+
 param yahooClientId = 'dj0yJmk9T3JiQWxQdnFaNjR0JmQ9WVdrOWVEUXdVbmRqYWxJbWNHbzlNQT09JnM9Y29uc3VtZXJzZWNyZXQmc3Y9MCZ4PThi'

@@ -33,6 +33,7 @@ from reddysec.store.db import Database, get_database
 from . import auth
 from .auth import LoginRequired, OAuthProvider
 from .routes import (
+    admin,
     api,
     assistant,
     audit,
@@ -231,6 +232,7 @@ def create_app(
         mailboxes.router,
         audit.router,
         concierge.router,
+        admin.router,
         notifications.router,
         settings_routes.router,
         hooks.router,

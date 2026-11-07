@@ -323,6 +323,17 @@ def urls_in_html(html: str, href_source: UrlSource, text_source: UrlSource) -> l
         # The anchor's visible text was captured as display_text above; a
         # domain shown as link text is not itself a second link to follow.
         tag.decompose()
+    # A form in an email is a button that sends what you typed somewhere:
+    # its action (and any button's formaction) is a link to check.
+    for tag in soup.find_all(["form", "button", "input"]):
+        attr = "action" if tag.name == "form" else "formaction"
+        target = tag.get(attr)
+        if not target or not isinstance(target, str):
+            continue
+        label = None if tag.name == "form" else (tag.get("value") if tag.name == "input" else tag.get_text(" ", strip=True))
+        url = build_url(target, href_source, label if isinstance(label, str) and label else None)
+        if url:
+            out.append(url)
     for tag in soup(["script", "style"]):
         tag.decompose()
     for raw in urls_in_text(soup.get_text(" ")):

@@ -8,7 +8,7 @@
 </header>
 
 <nav class="settings-nav" aria-label="Settings sections">
-  <a href="#look">Appearance</a><a href="#view">Accounts view</a><a href="#signin">Ways to sign in</a><a href="#two-step">Two-step sign-in</a><a href="#lock">App lock</a><a href="#devices">Devices</a><a href="#install">Install on iPhone</a><a href="#password">Password</a>
+  <a href="#look">Appearance</a><a href="#view">Accounts view</a><a href="#scams">Money scams</a><a href="#signin">Ways to sign in</a><a href="#two-step">Two-step sign-in</a><a href="#lock">App lock</a><a href="#devices">Devices</a><a href="#install">Install on iPhone</a><a href="#password">Password</a>
 </nav>
 
 <section class="card" id="look" aria-labelledby="look-title">
@@ -42,6 +42,21 @@
       <label class="seg"><input type="radio" name="inbox_view" value="together"{% if inbox_view == "together" %} checked{% endif %}><span>Together</span></label>
       <label class="seg"><input type="radio" name="inbox_view" value="separate"{% if inbox_view == "separate" %} checked{% endif %}><span>Separately</span></label>
     </fieldset>
+    <button class="btn btn-quiet btn-small" type="submit">Save</button>
+  </form>
+</section>
+
+<section class="card" id="scams" aria-labelledby="scams-title">
+  <div class="card-head">
+    <h2 id="scams-title">Text-only emails</h2>
+    {{ icon("shield-check", "ico ico-title") }}
+  </div>
+  <p class="muted small">We check every email with a link, a button or a file. Plain text emails are not checked.</p>
+  <form method="post" action="/settings/text-scams" class="theme-form">
+    {{ csrf() }}
+    <input type="hidden" name="text_scams" value="off">
+    <label class="check"><input type="checkbox" name="text_scams" value="on"{% if text_scams %} checked{% endif %} data-autosubmit><span>Also watch text-only emails for money scams (wire transfer, gift cards)</span></label>
+    <p class="muted small">Scammers sometimes send no links at all and just ask for money. Turn this on to also check those.</p>
     <button class="btn btn-quiet btn-small" type="submit">Save</button>
   </form>
 </section>

@@ -108,6 +108,7 @@ async def security_page(request: Request, user: UserRow = Depends(current_user))
             "timeouts": applock.TIMEOUTS,
             "passkeys": passkeys,
             "inbox_view": prefs[preferences.INBOX_VIEW],
+            "text_scams": prefs[preferences.TEXT_SCAMS] == "on",
         },
     )
 
@@ -290,6 +291,29 @@ async def view_set(
         flash(request, "Your accounts are shown together." if inbox_view == "together" else
               "Each account is shown on its own.")
     return RedirectResponse(safe_return_to(next, "/settings/security#view"), status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --------------------------------------------------------------------------- text-only money scams
+
+
+TEXT_SCAMS_HELP = (
+    "Scammers sometimes send no links at all and just ask for money. Turn this on to also check those."
+)
+
+
+@router.post("/settings/text-scams", name="text_scams_set")
+async def text_scams_set(request: Request, user: UserRow = Depends(current_user)) -> Response:
+    """"Also watch text-only emails for money scams" (off by default: we only
+    check email with something to click or open). Applies to new email. The
+    form sends a hidden "off" and, when ticked, the checkbox's "on"."""
+    form = await request.form()
+    choice = "on" if "on" in form.getlist("text_scams") else "off"
+    async with request.app.state.db.session() as session:
+        await preferences.set_preference(session, user.id, preferences.TEXT_SCAMS, choice)
+        queries.audit(session, actor=user, action="text_scams_" + choice)
+    flash(request, "We now also check text-only emails for money scams." if choice == "on"
+          else "We check only emails with links or files.")
+    return _see_other("#scams")
 
 
 # --------------------------------------------------------------------------- devices

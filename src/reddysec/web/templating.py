@@ -33,10 +33,11 @@ NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("/audit", "Audit"),
 )
 STAFF_NAV_ITEMS: tuple[tuple[str, str], ...] = (("/concierge", "Concierge"),)
+ADMIN_NAV_ITEMS: tuple[tuple[str, str], ...] = (("/admin/users", "People"),)
 SETTINGS_NAV_ITEM: tuple[str, str] = ("/settings/security", "Settings")
 NAV_ICONS = {
     "/": "home", "/messages": "mail", "/assistant": "chat", "/mailboxes": "inbox", "/audit": "list",
-    "/concierge": "users", "/settings/security": "settings",
+    "/concierge": "users", "/admin/users": "key", "/settings/security": "settings",
 }
 
 
@@ -103,6 +104,8 @@ def _context_processor(request: Request) -> dict[str, Any]:
     nav = list(NAV_ITEMS)
     if user is not None and is_staff(user):
         nav.extend(STAFF_NAV_ITEMS)
+    if user is not None and user.role == "admin":
+        nav.extend(ADMIN_NAV_ITEMS)
     nav.append(SETTINGS_NAV_ITEM)
     # Error pages leave queued flashes alone so the message the client was
     # meant to see survives until the next real page.

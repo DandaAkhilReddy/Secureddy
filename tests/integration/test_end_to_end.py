@@ -129,19 +129,19 @@ async def test_phish_is_quarantined_and_visible_end_to_end(db, tmp_env: Path, ev
 
     await worker.run_cycle()
 
-    # The phish went to Quarantine, the plain email was released into the inbox.
+    # The phish went to Quarantine. The plain email has nothing to click or
+    # open: released into the inbox at once, no label, nothing stored.
     assert fake_mailbox.in_inbox[phish.provider_message_id] is False
     assert "Secureddy/Quarantine" in fake_mailbox.labels[phish.provider_message_id]
     assert fake_mailbox.in_inbox[plain.provider_message_id] is True
-    assert "Secureddy/Checked" in fake_mailbox.labels[plain.provider_message_id]
+    assert not any(label.startswith("Secureddy/") for label in fake_mailbox.labels[plain.provider_message_id])
 
     async with db.session() as session:
         rows = (await session.execute(MessageRow.__table__.select())).mappings().all()
     by_pid = {r["provider_message_id"]: r for r in rows}
     phish_row = by_pid[phish.provider_message_id]
-    plain_row = by_pid[plain.provider_message_id]
+    assert plain.provider_message_id not in by_pid
     assert phish_row["level"] == "malicious" and phish_row["quarantined"] is True
-    assert plain_row["level"] == "safe" and plain_row["quarantined"] is False
     verdict = phish_row["verdict"]
     codes = {s["code"] for s in verdict["signals"]}
     assert any(c.startswith("dynamic.") for c in codes), codes  # the sandbox contributed evidence

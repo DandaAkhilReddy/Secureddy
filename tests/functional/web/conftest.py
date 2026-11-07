@@ -211,6 +211,11 @@ def settings(tmp_path) -> Settings:
         secret_key=SecretStr("functional-test-secret-key-that-is-long"),
         token_kek=SecretStr(""),
         hold_dead_man_minutes=10,
+        # Most sign-in tests are about identities, not invites: they run as a
+        # self-hosted "open" server with room to spare. The invite-only
+        # default is covered by test_web_people.py.
+        signup_mode="open",
+        max_users=100,
     )
 
 

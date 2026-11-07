@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf, icon with context %}
+{% block title %}People · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>People</h1>
+  <p class="lede">Secureddy is free and {{ "invite-only" if invite_only else "open" }}. <span class="num">{{ used }}</span> of {{ max_users }} places used.</p>
+</header>
+
+<section class="card" id="invite" aria-labelledby="invite-title">
+  <div class="card-head">
+    <h2 id="invite-title">Invite someone</h2>
+    {{ icon("plus", "ico ico-title") }}
+  </div>
+  {% if full %}
+  <p class="muted small">All {{ max_users }} places are used. Turn an account off to make room.</p>
+  {% else %}
+  <p class="muted small">They sign in with Google, Microsoft or Yahoo using exactly this address.</p>
+  <form method="post" action="/admin/invites" class="inline-form">
+    {{ csrf() }}
+    <label class="sr-only" for="invite-email">Email address</label>
+    <input class="input" id="invite-email" type="email" name="email" placeholder="name@gmail.com" maxlength="320" autocomplete="off" required>
+    <button class="btn btn-primary" type="submit">Invite</button>
+  </form>
+  {% endif %}
+  {% if invites %}
+  <h3 class="small">Waiting to sign in</h3>
+  <ul class="row-list" role="list">
+    {% for inv in invites %}
+    <li class="row-item">
+      <span class="row-main"><strong>{{ inv.email }}</strong><span class="muted small">invited {{ inv.created_at | ago }}</span></span>
+      <form method="post" action="/admin/invites/{{ inv.id }}/revoke" data-confirm="Withdraw the invitation for {{ inv.email }}?">
+        {{ csrf() }}
+        <button class="btn btn-ghost btn-small" type="submit">Withdraw</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section class="card table-wrap" aria-labelledby="people-title">
+  <h2 id="people-title" class="sr-only">Accounts</h2>
+  <table class="table">
+    <thead>
+      <tr><th>Person</th><th class="col-hide-sm">Signs in with</th><th class="col-hide-sm">Mailboxes</th><th>Last active</th><th>Role</th><th><span class="sr-only">Actions</span></th></tr>
+    </thead>
+    <tbody>
+      {% for p in people %}
+      <tr{% if p.row.disabled %} class="muted"{% endif %}>
+        <td><strong>{{ p.row.display_name }}</strong>{% if p.is_me %} <span class="muted small">(you)</span>{% endif %}<span class="muted small block">{{ p.row.login_email }}</span>{% if p.row.disabled %}<span class="small block">Turned off</span>{% endif %}</td>
+        <td class="col-hide-sm">{{ p.sign_in | join(", ") if p.sign_in else "Not yet" }}</td>
+        <td class="col-hide-sm">{% for m in p.mailboxes %}<span class="block small">{{ m.address }}{% if m.status != "active" %} <span class="muted">({{ m.status }})</span>{% endif %}</span>{% else %}<span class="muted">None</span>{% endfor %}</td>
+        <td>{% if p.last_active %}<time datetime="{{ p.last_active.isoformat() }}">{{ p.last_active | ago }}</time>{% else %}<span class="muted">Never</span>{% endif %}</td>
+        <td>
+          {% if p.is_me %}{{ p.role_name }}{% else %}
+          <form method="post" action="/admin/users/{{ p.row.id }}/role" class="inline-form">
+            {{ csrf() }}
+            <label class="sr-only" for="role-{{ p.row.id }}">Role of {{ p.row.login_email }}</label>
+            <select class="input" id="role-{{ p.row.id }}" name="role">
+              {% for code, label, help in roles %}<option value="{{ code }}" title="{{ help }}"{% if p.row.role == code %} selected{% endif %}>{{ label }}</option>{% endfor %}
+              {% if p.row.role not in ("principal", "concierge", "admin") %}<option value="" selected disabled>{{ p.role_name }}</option>{% endif %}
+            </select>
+            <button class="btn btn-quiet btn-small" type="submit">Save</button>
+          </form>
+          {% endif %}
+        </td>
+        <td>
+          {% if not p.is_me %}
+          {% if p.row.disabled %}
+          <form method="post" action="/admin/users/{{ p.row.id }}/enable">
+            {{ csrf() }}
+            <button class="btn btn-quiet btn-small" type="submit">Turn on</button>
+          </form>
+          {% else %}
+          <form method="post" action="/admin/users/{{ p.row.id }}/disable" data-confirm="Turn off {{ p.row.login_email }}? Their devices are signed out and their mailboxes paused.">
+            {{ csrf() }}
+            <button class="btn btn-ghost btn-small" type="submit">Turn off</button>
+          </form>
+          {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<p class="muted small">No payments, ever. Turning an account off frees its place; turning it back on resumes the mailboxes we paused.</p>
+{% endblock %}

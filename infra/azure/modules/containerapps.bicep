@@ -114,6 +114,17 @@ param microsoftClientId string = ''
 @description('Yahoo OpenID Connect client id (sign-in only). Empty = Yahoo button hidden.')
 param yahooClientId string = ''
 
+@description('RS_BOOTSTRAP_ADMIN_EMAIL: while no account is an admin, the account with this email becomes one. Not a secret.')
+param bootstrapAdminEmail string = ''
+
+@description('RS_MAX_USERS: most accounts Secureddy accepts (free, no payments).')
+@minValue(1)
+param maxUsers int = 5
+
+@description('RS_SIGNUP_MODE: invite_only (new accounts need an invite) or open (self-hosters).')
+@allowed(['invite_only', 'open'])
+param signupMode string = 'invite_only'
+
 @description('Adds RS_ANTHROPIC_API_KEY from Key Vault secret rs-anthropic-api-key. The secret must exist before this is turned on.')
 param anthropicEnabled bool = false
 
@@ -260,6 +271,9 @@ var commonEnv = [
   { name: 'RS_HOLD_DEAD_MAN_MINUTES', value: string(holdDeadManMinutes) }
   { name: 'RS_INTEL_ONLINE', value: 'true' }
   { name: 'RS_DEV_LOGIN_ENABLED', value: 'false' }
+  { name: 'RS_BOOTSTRAP_ADMIN_EMAIL', value: bootstrapAdminEmail }
+  { name: 'RS_MAX_USERS', value: string(maxUsers) }
+  { name: 'RS_SIGNUP_MODE', value: signupMode }
   { name: 'RS_NOTIFICATION_FROM', value: notificationFrom }
   { name: 'RS_NOTIFY_WEBHOOK_URL', value: notifyWebhookUrl }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }

@@ -11,6 +11,7 @@ principal's protection off, so every mutation uses ``manage=True`` and answers
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import Depends, Form, HTTPException, Request, status
@@ -294,6 +295,18 @@ async def mailbox_resume(
     return _see_other()
 
 
+async def _lift_hold(connector: Any, mailbox_id: str) -> None:
+    try:
+        teardown = getattr(connector, "teardown", None)
+        if callable(teardown):
+            await teardown()
+        release = getattr(connector, "release_all_pending", None)
+        if callable(release):
+            await release()
+    except Exception as exc:  # noqa: BLE001 - signing out must still work
+        log.warning("mailbox_hold_lift_failed", mailbox_id=mailbox_id, error=type(exc).__name__)
+
+
 @router.post("/mailboxes/{mailbox_id}/disconnect", name="mailbox_disconnect")
 async def mailbox_disconnect(
     request: Request, mailbox_id: str, user: UserRow = Depends(current_user)
@@ -309,6 +322,10 @@ async def mailbox_disconnect(
         try:
             connector = await request.app.state.connector_factory(mailbox)
             try:
+                if mailbox.mode == "hold" and mailbox.labels:
+                    # Once we let go of the mailbox nobody can release what the
+                    # hold rule parks, so lift the rule and release first.
+                    await _lift_hold(connector, mailbox.id)
                 revoke = getattr(connector, "revoke", None)
                 revoked = bool(await revoke()) if callable(revoke) else False
             finally:

@@ -255,3 +255,47 @@ one provider broken).
 | quarterly | backup restore drill; review WAF logs for false positives; review audit log access patterns |
 | 11 months | regenerate the ACR chamber pull token; renew CASA assessment; rotate `rs-token-kek` |
 | yearly | review Azure Policy assignments and role assignments against `security-model.md` |
+
+## 11. People: invites, the 5-person limit, the first admin
+
+Secureddy is free and invite-only, at most `RS_MAX_USERS` (5) accounts.
+
+| Task | How |
+|------|-----|
+| Invite someone | Admin -> **People** -> Invite, or `reddysec invite friend@gmail.com` |
+| See who uses it | **People**, or `reddysec list-users` (shows "N of 5 places used" and open invites) |
+| Make someone an admin | **People** -> role, or `reddysec make-admin them@gmail.com` (they must have signed in once) |
+| Free a place | **People** -> Turn off (signs out every device, pauses their mailboxes; Turn on resumes them) |
+
+* A sign-in that would open a *new* account needs an open invite for that
+  exact, provider-verified email and a free place. Otherwise the person sees
+  "Secureddy is invite-only right now". Existing accounts always get in.
+* First admin: set `RS_BOOTSTRAP_ADMIN_EMAIL` (Bicep `bootstrapAdminEmail`).
+  While no account is an admin, that account becomes one at sign-in, and the
+  startup migration promotes it if it already exists.
+* Developer sign-in (`RS_DEV_LOGIN_ENABLED`, never in production) is not
+  limited by invites.
+
+## 12. Text-only email
+
+Only email with a link, a button, a QR code or a file is checked. Text-only
+email is not stored, not labelled, not counted and never notified; in Hold
+mode it is released at once. The worker only bumps an operations counter,
+`mailbox_daily_counters.skipped_text_only` (per mailbox, per UTC day), which
+the app never shows. To look at it:
+
+```sql
+SELECT mailbox_id, day, skipped_text_only FROM mailbox_daily_counters ORDER BY day DESC LIMIT 30;
+```
+
+Rows stored before this rule are removed by the startup migration (logged as
+`db.purged_text_only`); `reddysec purge-text-only --dry-run` counts them and
+`reddysec purge-text-only` removes them by hand. Quarantined rows and rows
+waiting on the worker or the client are never removed. People can turn on
+"Also watch text-only emails for money scams" in Settings; then text-only
+email that reads like wire fraud or a gift-card request is checked too.
+
+A paused Hold mailbox (paused by its owner, or by an admin turning the account
+off) has its hold rule lifted and held mail released by the worker on its
+next cycle; resuming installs the rule again. "Sign out of this mailbox" on a
+Hold mailbox does the same before it deletes our access.

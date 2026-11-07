@@ -46,9 +46,11 @@ def email_bytes(
     subject: str,
     *,
     sender: str = "Alice <alice@example.com>",
-    body: str = "hello",
+    body: str = "hello, the details are at https://docs.example/item",
     message_id: str | None = None,
 ) -> bytes:
+    """A small email. The default body has a link: Secureddy only checks email
+    with something to click or open (text-only mail is ignored)."""
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = "client@gmail.com"
@@ -826,16 +828,13 @@ class TestRealWiring:
             detonator=fake_detonator,
         )
         stats = await worker.run_cycle()  # setup + the two messages already waiting
-        assert stats.messages == 2 and stats.failed == 0
+        # The plain note has nothing to click: ignored, not stored, released at once.
+        assert stats.messages == 1 and stats.text_only == 1 and stats.failed == 0
         rows = await harness.messages(mailbox.id)
-        assert rows["m1"].state == "done" and rows["m1"].level in {
-            "safe",
-            "suspicious",
-            "malicious",
-            "unknown",
-        }
+        assert "m1" not in rows and fake.in_inbox["m1"]
         assert rows["m2"].url_count == 1 and rows["m2"].state == "done"
-        assert all(fake.in_inbox[pid] for pid in ("m1", "m2") if not rows[pid].quarantined)
+        assert rows["m2"].level in {"safe", "suspicious", "malicious", "unknown"}
+        assert fake.in_inbox["m2"] or rows["m2"].quarantined
         del user
 
     def test_online_intel_wiring_uses_shared_http_client(self, db):

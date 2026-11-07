@@ -163,6 +163,18 @@ class Settings(BaseSettings):
     smtp_password: SecretStr = SecretStr("")
     notify_webhook_url: str = ""  # optional generic webhook (SMS/push bridge)
 
+    # --- who may open an account (free, invite-only) ----------------------
+    # Secureddy is free and for a handful of people. "invite_only": a sign-in
+    # that would create an account needs an open invite for that verified
+    # email (Admin -> People, or `reddysec invite`) and a free place below
+    # max_users. "open": anyone may sign up (self-hosters), still capped at
+    # max_users. People who already have an account are never locked out.
+    max_users: int = 5
+    signup_mode: Literal["invite_only", "open"] = "invite_only"
+    # While no account is an admin, the account with this email becomes one
+    # (at sign-in, and by the startup migration for an existing account).
+    bootstrap_admin_email: str = ""
+
     # --- development conveniences ---------------------------------------
     dev_login_enabled: bool = Field(default=False, description="Allow password-less dev sign-in. Never in prod.")
 

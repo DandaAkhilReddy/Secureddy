@@ -66,6 +66,7 @@ from reddysec.store.models import (
     UserIdentityRow,
     UserRow,
 )
+from reddysec.store.people import SignupPolicy, accept_invite, check_signup
 from reddysec.store.repo import (
     STATE_QUARANTINE_REQUESTED,
     STATE_RELABEL_SAFE_REQUESTED,
@@ -289,6 +290,7 @@ async def resolve_identity(
     name: str | None = None,
     tenant: str = "",
     personal_tenant: str = "",
+    signup: SignupPolicy | None = None,
 ) -> tuple[UserRow, bool]:
     """The account a sign-in belongs to: ``(user, created)``.
 
@@ -301,7 +303,10 @@ async def resolve_identity(
        (tenant). Otherwise :class:`IdentityConflict` (``email_taken``): the
        person must sign in the way they did before and connect this mailbox
        from the Mailboxes page. Never link by email alone.
-    4. No account with that email: create one.
+    4. No account with that email: create one, if ``signup`` (the
+       invite-only rules, ``store.people``) allows it; otherwise
+       :class:`~reddysec.store.people.SignupRefused`. ``None`` skips the
+       rules (callers that provision accounts themselves).
     """
     email = normalize_email(email)
     known = await get_identity(session, provider, subject)
@@ -335,11 +340,15 @@ async def resolve_identity(
         await _add_identity(session, existing, provider=provider, subject=subject, email=email,
                             email_verified=email_verified, tenant=tenant)
         return existing, False
+    if signup is not None:
+        await check_signup(session, signup, email, email_verified=email_verified)
     user, _ = await get_or_create_user(session, email=email, display_name=name)
     if name:
         user.display_name = name.strip()[:200] or user.display_name
     await _add_identity(session, user, provider=provider, subject=subject, email=email,
                         email_verified=email_verified, tenant=tenant)
+    if signup is not None:
+        await accept_invite(session, user)
     return user, True
 
 
@@ -372,13 +381,13 @@ async def link_identity(
 
 
 async def upsert_google_user(
-    session: AsyncSession, *, sub: str, email: str, name: str | None
+    session: AsyncSession, *, sub: str, email: str, name: str | None, signup: SignupPolicy | None = None
 ) -> tuple[UserRow, bool]:
     """Google sign-in: Google has verified the email (the callback refuses
     unverified ones), so an existing account with that email is linked unless
     that account only ever signed in with unverified identities."""
     return await resolve_identity(
-        session, provider="google", subject=sub, email=email, email_verified=True, name=name
+        session, provider="google", subject=sub, email=email, email_verified=True, name=name, signup=signup
     )
 
 

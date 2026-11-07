@@ -118,18 +118,18 @@ class TestSentences:
     @pytest.mark.parametrize(
         ("counts", "expected"),
         [
-            (WeeklyCounts(0, 0, 0), "We have not seen any new email this week. Everything is quiet."),
-            (WeeklyCounts(1, 0, 0), "We checked 1 email this week. Nothing looked suspicious."),
-            (WeeklyCounts(42, 1, 1), "We checked 42 emails this week. 1 looked suspicious. We moved it out of your inbox."),
+            (WeeklyCounts(0, 0, 0), "We have not seen any new email with links or files this week. Everything is quiet."),
+            (WeeklyCounts(1, 0, 0), "We checked 1 email with links or files this week. Nothing looked suspicious."),
+            (WeeklyCounts(42, 1, 1), "We checked 42 emails with links or files this week. 1 looked suspicious. We moved it out of your inbox."),
             (
                 WeeklyCounts(42, 5, 3),
-                "We checked 42 emails this week. 5 looked suspicious. We moved 3 out of your inbox.",
+                "We checked 42 emails with links or files this week. 5 looked suspicious. We moved 3 out of your inbox.",
             ),
             (
                 WeeklyCounts(42, 3, 3),
-                "We checked 42 emails this week. 3 looked suspicious. We moved all of them out of your inbox.",
+                "We checked 42 emails with links or files this week. 3 looked suspicious. We moved all of them out of your inbox.",
             ),
-            (WeeklyCounts(5, 1, 0), "We checked 5 emails this week. 1 looked suspicious."),
+            (WeeklyCounts(5, 1, 0), "We checked 5 emails with links or files this week. 1 looked suspicious."),
         ],
     )
     def test_weekly_sentence(self, counts, expected):
@@ -138,17 +138,17 @@ class TestSentences:
     @pytest.mark.parametrize(
         ("period", "expected"),
         [
-            ("today", "We checked 120 emails today. 3 looked suspicious."),
-            ("7d", "We checked 120 emails this week. 3 looked suspicious."),
-            ("1m", "We checked 120 emails this month. 3 looked suspicious."),
-            ("1y", "We checked 120 emails this year. 3 looked suspicious."),
-            ("bogus", "We checked 120 emails this week. 3 looked suspicious."),
+            ("today", "We checked 120 emails with links or files today. 3 looked suspicious."),
+            ("7d", "We checked 120 emails with links or files this week. 3 looked suspicious."),
+            ("1m", "We checked 120 emails with links or files this month. 3 looked suspicious."),
+            ("1y", "We checked 120 emails with links or files this year. 3 looked suspicious."),
+            ("bogus", "We checked 120 emails with links or files this week. 3 looked suspicious."),
         ],
     )
     def test_sentence_follows_the_period(self, period, expected):
         assert p.weekly_sentence(WeeklyCounts(120, 3, 0, 117), has_mailboxes=True, period=period) == expected
         assert p.weekly_sentence(WeeklyCounts(), has_mailboxes=True, period="today") == (
-            "We have not seen any new email today. Everything is quiet.")
+            "We have not seen any new email with links or files today. Everything is quiet.")
 
     def test_weekly_sentence_without_mailboxes(self):
         assert p.weekly_sentence(WeeklyCounts(), has_mailboxes=False).startswith("Connect a mailbox")

@@ -10,6 +10,10 @@
 * ``theme``: ``system`` (follow the device), ``dark`` or ``light``. Pages
   read it on every signed-in request; the ``rs_theme`` cookie is the fallback
   for pages without a signed-in person (sign-in, lock screen).
+* ``text_scams``: ``on`` or ``off`` (default). "Also watch text-only emails
+  for money scams": Secureddy only checks email with something to click or
+  open; with this on, the worker also checks text-only email that reads like
+  a wire-transfer or gift-card scam (``analysis.actionable``).
 
 Only the keys and values listed here can be stored.
 """
@@ -24,15 +28,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from reddysec.core.ids import new_id
 from reddysec.store.models import MailboxRow, UserPreferenceRow
+from reddysec.store.repo import PREF_WATCH_TEXT_SCAMS
 
 INBOX_VIEW = "inbox_view"
 SELECTED_MAILBOX = "selected_mailbox"
 PERIOD = "period"
 THEME = "theme"
+TEXT_SCAMS = PREF_WATCH_TEXT_SCAMS
+ON_OFF = ("on", "off")
 VIEWS = ("together", "separate")
 PERIODS = ("today", "7d", "1m", "1y")
 THEMES = ("system", "dark", "light")
-DEFAULTS: dict[str, str] = {INBOX_VIEW: "together", SELECTED_MAILBOX: "", PERIOD: "7d", THEME: ""}
+DEFAULTS: dict[str, str] = {INBOX_VIEW: "together", SELECTED_MAILBOX: "", PERIOD: "7d", THEME: "", TEXT_SCAMS: "off"}
 TZ_COOKIE = "rs_tz"
 MAX_VALUE = 200
 
@@ -46,6 +53,8 @@ def _valid(key: str, value: str) -> bool:
         return value in PERIODS
     if key == THEME:
         return value in THEMES
+    if key == TEXT_SCAMS:
+        return value in ON_OFF
     return False
 
 
@@ -150,6 +159,7 @@ __all__ = [
     "INBOX_VIEW",
     "PERIOD",
     "PERIODS",
+    "TEXT_SCAMS",
     "THEME",
     "THEMES",
     "client_tz",

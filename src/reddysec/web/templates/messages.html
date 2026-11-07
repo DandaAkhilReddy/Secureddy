@@ -30,7 +30,7 @@
 <header class="page-head page-head-row">
   <div>
     <h1>{{ "Search results" if q else "Your email" }}</h1>
-    <p class="lede">{{ "Matching your words in the sender, subject, account and our reasons." if q else "Every message we have checked, newest first. Open one to read it or see why we marked it." }}</p>
+    <p class="lede">{{ "Matching your words in the sender, subject, account and our reasons." if q else "Every email with links or files we have checked, newest first. Open one to read it or see why we marked it." }}</p>
   </div>
   {% if multi %}
   <form method="post" action="/settings/view" class="view-form">

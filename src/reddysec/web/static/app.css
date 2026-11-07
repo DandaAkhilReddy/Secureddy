@@ -1182,6 +1182,7 @@ time { color: var(--text-muted); white-space: nowrap; }
 .acct-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .acct-stats div { padding: 10px 12px; background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius-sm); min-width: 0; }
 .acct-stats dt { font-size: var(--fs-xs); color: var(--text-dim); }
+.acct-note { margin: 6px 2px 0; }
 .acct-stats dd { margin: 2px 0 0; font-weight: 650; font-size: 1.1rem; }
 .acct-flagged { color: var(--warn); }
 .acct-actions { display: flex; flex-wrap: wrap; gap: 8px; }

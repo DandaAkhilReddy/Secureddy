@@ -326,3 +326,66 @@ class TestDataCommands:
         assert ("deadman_release", "admin", "ops drill") in audit
         assert cli.main(["release-all", "--mailbox-id", "mbx_missing"]) == 1
         assert "no mailbox" in capsys.readouterr().err
+
+
+class TestPeopleCommands:
+    """``invite``, ``make-admin``, ``list-users`` and ``purge-text-only``."""
+
+    def test_invite_then_list(self, cli_env, capsys, monkeypatch):
+        assert cli.main(["invite", "Friend@Gmail.com"]) == 0
+        assert "invited: friend@gmail.com (0 of 5 places used)" in capsys.readouterr().out
+        assert cli.main(["invite", "friend@gmail.com"]) == 0
+        assert "already invited" in capsys.readouterr().out
+        assert cli.main(["invite", "not-an-email"]) == 2
+        assert cli.main(["add-user", "--email", "a@b.co", "--name", "A"]) == 0
+        capsys.readouterr()
+        assert cli.main(["invite", "a@b.co"]) == 0
+        assert "a@b.co already has an account" in capsys.readouterr().out
+        assert cli.main(["list-users"]) == 0
+        out = capsys.readouterr().out
+        assert "1 of 5 places used · sign-up: invite_only" in out
+        assert "a@b.co" in out and "(invited)" in out and "friend@gmail.com" in out
+        actions = run_db(lambda s: repo.list_audit(s))
+        assert any(a.action == "invite_created" and a.details.get("via") == "cli" for a in actions)
+
+    def test_invite_refused_when_full(self, cli_env, capsys, monkeypatch):
+        from reddysec.config import reset_settings_cache
+
+        monkeypatch.setenv("RS_MAX_USERS", "1")
+        reset_settings_cache()
+        assert cli.main(["add-user", "--email", "a@b.co", "--name", "A"]) == 0
+        assert cli.main(["invite", "x@y.co"]) == 1
+        assert "all 1 places are used" in capsys.readouterr().err
+
+    def test_make_admin(self, cli_env, capsys):
+        assert cli.main(["make-admin", "nobody@x.co"]) == 1
+        assert "sign in once first" in capsys.readouterr().err
+        assert cli.main(["add-user", "--email", "boss@x.co", "--name", "Boss"]) == 0
+        assert cli.main(["make-admin", "Boss@X.co"]) == 0
+        assert "boss@x.co is now an admin" in capsys.readouterr().out
+        assert cli.main(["make-admin", "boss@x.co"]) == 0
+        assert "already an admin" in capsys.readouterr().out
+        user = run_db(lambda s: repo.get_user_by_email(s, "boss@x.co"))
+        assert user.role == "admin"
+
+    def test_purge_text_only(self, cli_env, capsys):
+        from datetime import UTC, datetime
+
+        from reddysec.core.ids import new_id
+        from reddysec.store.models import MessageRow
+
+        async def seed(s):
+            user = await repo.create_user(s, email="c@x.co", display_name="C")
+            mbx = await repo.create_mailbox(s, user_id=user.id, provider="gmail", address="c@x.co")
+            for i in range(3):
+                s.add(MessageRow(id=new_id("msg"), mailbox_id=mbx.id, provider_message_id=f"p{i}",
+                                 received_at=datetime.now(UTC), state="done", verdict={"signals": []},
+                                 url_count=1 if i == 0 else 0))
+
+        run_db(seed)
+        assert cli.main(["purge-text-only", "--dry-run"]) == 0
+        assert "would remove 2 stored text-only emails" in capsys.readouterr().out
+        assert cli.main(["purge-text-only"]) == 0
+        assert "removed 2 stored text-only emails" in capsys.readouterr().out
+        assert cli.main(["purge-text-only"]) == 0
+        assert "removed 0 stored text-only emails" in capsys.readouterr().out

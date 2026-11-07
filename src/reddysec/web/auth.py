@@ -40,6 +40,7 @@ from starlette.responses import RedirectResponse, Response
 
 from reddysec.core.logging import get_logger
 from reddysec.models import Role
+from reddysec.store import people
 from reddysec.store.models import AppLockRow, UserRow, UserSessionRow
 
 from . import mfa, preferences, queries
@@ -181,10 +182,52 @@ async def start_session(request: Request, user_id: str, *, method: str) -> None:
         if lock is not None and (lock.failed_attempts or lock.locked_until):
             lock.failed_attempts = 0
             lock.locked_until = None
+        await _bootstrap_admin(session, settings, user_id)
     login_session(request)
     max_age = int((row.expires_at - row.created_at).total_seconds())
     request.scope["auth_set_cookie"] = (token, max_age)
     request.scope["auth"] = AuthContext(session_id=row.id, handle=row.handle, user_id=user_id)
+
+
+async def _bootstrap_admin(session: Any, settings: Any, user_id: str) -> None:
+    """First run: while nobody is an admin, the account with the bootstrap
+    admin email (``RS_BOOTSTRAP_ADMIN_EMAIL``) becomes one at sign-in. Only an
+    account whose email was verified qualifies (see ``store.people``)."""
+    policy = people.SignupPolicy.from_settings(settings)
+    if not policy.bootstrap_admin_email:
+        return
+    user = await session.get(UserRow, user_id)
+    if user is None or people.normalize_email(user.login_email) != policy.bootstrap_admin_email:
+        return
+    trusted = await queries.account_email_is_trusted(session, user)
+    if await people.maybe_bootstrap_admin(session, policy, user, trusted=trusted):
+        queries.audit(session, actor=None, action="admin_bootstrapped", target=user.id,
+                      details={"email": user.login_email})
+        log.info("auth.admin_bootstrapped", user_id=user.id)
+
+
+def signup_policy(request: Request) -> people.SignupPolicy:
+    return people.SignupPolicy.from_settings(request.app.state.settings)
+
+
+INVITE_ONLY_TITLE = "Secureddy is invite-only right now"
+
+
+def _signup_refused(request: Request, refused: people.SignupRefused) -> Response:
+    """The calm page for a sign-in that would open a new account we cannot open."""
+    email = refused.email
+    message = f"Ask the person who invited you to add {email}."
+    if refused.reason == "full":
+        message = (f"Every place is taken at the moment. Ask the person who invited you to make room, "
+                   f"then add {email}.")
+    log.info("auth.signup_refused", reason=refused.reason)
+    return render(
+        request,
+        "error.html",
+        {"status_code": 403, "title": INVITE_ONLY_TITLE, "message": message, "cta_href": "/login",
+         "cta_label": "Back to sign in"},
+        status_code=status.HTTP_403_FORBIDDEN,
+    )
 
 
 async def end_session(request: Request, reason: str = "signed_out") -> None:
@@ -550,10 +593,12 @@ async def google_callback(
                 )
             else:
                 user, created = await queries.upsert_google_user(
-                    session, sub=sub, email=email, name=claims.get("name")
+                    session, sub=sub, email=email, name=claims.get("name"), signup=signup_policy(request)
                 )
         except queries.IdentityConflict as exc:
             problem: str | None = exc.reason
+        except people.SignupRefused as refused:
+            return _signup_refused(request, refused)
         else:
             problem = None
         if problem is None:
@@ -609,9 +654,12 @@ async def microsoft_callback(
                 user, created = await queries.resolve_identity(
                     session, provider="microsoft", subject=oid, email=email, email_verified=verified,
                     name=claims.get("name"), tenant=tenant, personal_tenant=PERSONAL_MICROSOFT_TENANT,
+                    signup=signup_policy(request),
                 )
         except queries.IdentityConflict as exc:
             problem: str | None = exc.reason
+        except people.SignupRefused as refused:
+            return _signup_refused(request, refused)
         else:
             problem = None
         if problem is None:
@@ -668,10 +716,12 @@ async def yahoo_callback(
             else:
                 user, _created = await queries.resolve_identity(
                     session, provider="yahoo", subject=sub, email=email, email_verified=verified,
-                    name=claims.get("name"),
+                    name=claims.get("name"), signup=signup_policy(request),
                 )
         except queries.IdentityConflict as exc:
             problem: str | None = exc.reason
+        except people.SignupRefused as refused:
+            return _signup_refused(request, refused)
         else:
             problem = None
         if problem is None:
@@ -872,7 +922,9 @@ async def dev_login(
     next: str = Form("/"),
 ) -> Response:
     """Password-less sign-in for local development. Creates the account on
-    first use; the role is accepted so staff screens can be exercised."""
+    first use; the role is accepted so staff screens can be exercised. Not
+    limited by invites or ``max_users`` (``store.people``): it exists only
+    when ``dev_login_enabled`` is set outside production."""
     _dev_login_enabled(request)
     if role not in {r.value for r in Role}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown role.")

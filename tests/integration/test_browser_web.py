@@ -242,3 +242,50 @@ def test_two_step_sign_in_in_a_browser(server, browser):
     assert re.search(r"Welcome back", page.content())
     assert any(c["name"] == "rs_mfa_dev" for c in ctx.cookies())
     ctx.close()
+
+
+def _sign_in_as_admin(page, base_url: str) -> None:
+    page.goto(f"{base_url}/login")
+    page.evaluate("document.querySelectorAll('details').forEach(function (d) { d.open = true; })")
+    dev = page.locator("form[action='/auth/dev-login']")
+    dev.locator("input[name=email]").fill("boss@example.com")
+    dev.locator("select[name=role]").select_option("admin")
+    dev.locator("button[type=submit]").click()
+    page.wait_for_url(f"{base_url}/")
+
+
+def test_admin_people_page_invites_and_fits_a_phone(server, browser):
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
+    page = ctx.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    _sign_in_as_admin(page, server.base_url)
+    page.goto(server.base_url + "/admin/users")
+    assert "places used" in page.locator(".lede").inner_text()
+    page.fill("#invite-email", "friend@gmail.com")
+    page.locator("form[action='/admin/invites'] button[type=submit]").click()
+    page.wait_for_url("**/admin/users")
+    assert "friend@gmail.com is invited" in page.content()
+    assert page.locator("form[action$='/revoke']").count() == 1
+    page.once("dialog", lambda d: d.accept())  # "Withdraw the invitation ...?"
+    page.locator("form[action$='/revoke'] button").click()
+    page.wait_for_url("**/admin/users")
+    assert "is withdrawn" in page.content()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert errors == []
+    ctx.close()
+
+
+def test_text_only_scam_choice_saves_itself(server, browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    sign_in(page, server.base_url)
+    page.goto(server.base_url + "/settings/security#scams")
+    box = page.locator("form[action='/settings/text-scams'] input[type=checkbox]")
+    assert not box.is_checked()
+    with page.expect_navigation():
+        box.check()  # data-autosubmit: the form posts on change
+    assert "We now also check text-only emails for money scams." in page.content()
+    page.goto(server.base_url + "/settings/security")
+    assert page.locator("form[action='/settings/text-scams'] input[type=checkbox]").is_checked()
+    page.goto(server.base_url + "/mailboxes")
+    assert page.locator(".acct-note").first.inner_text() == "Plain text emails are not checked"

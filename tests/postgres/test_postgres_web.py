@@ -45,6 +45,7 @@ def app(pg_url, tmp_path):
         artifacts_dir=str(tmp_path / "artifacts"),
         secret_key=SecretStr("postgres-functional-secret-key-long-enough"),
         token_kek=SecretStr(""),
+        signup_mode="open",  # these flows sign up a new person; invites have their own tests
     )
     yahoo = FakeOidc("yahoo", {"sub": "y" * 300, "email": ADDRESS, "email_verified": True, "name": "Akhil"})
 

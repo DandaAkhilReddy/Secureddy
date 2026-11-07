@@ -28,7 +28,7 @@ async def test_dashboard_with_messages_counts_and_rows(client, seed, login):
 
     page = client.get("/")
     assert page.status_code == 200
-    assert "We checked 3 emails this week. 2 looked suspicious. We moved 1 out of your inbox." in page.text
+    assert "We checked 3 emails with links or files this week. 2 looked suspicious. We moved 1 out of your inbox." in page.text
     cards = page.text.split('class="stats stats-2"')[1].split("</ul>")[0]
     assert cards.count('class="stat stat-link') == 2 and "In Quarantine" not in page.text
     assert "1 moved out of your inbox" in cards and 'class="stat-value">2<' in cards
@@ -38,7 +38,7 @@ async def test_dashboard_with_messages_counts_and_rows(client, seed, login):
         assert subject in page.text
     assert "Old news" not in page.text  # outside the period: neither counted nor listed
     year = client.get("/?period=1y").text
-    assert "Old news" in year and "We checked 4 emails this year." in year
+    assert "Old news" in year and "We checked 4 emails with links or files this year." in year
     assert page.text.count('class="chip tone-bad"') >= 1
     assert "Checking" in page.text
     recent = page.text.split('id="recent-title"')[1]
@@ -52,7 +52,7 @@ async def test_dashboard_quiet_week_sentence(client, seed, login):
     await seed.mailbox(user)
     login(client, "quiet@example.com")
     page = client.get("/")
-    assert "We have not seen any new email this week. Everything is quiet." in page.text
+    assert "We have not seen any new email with links or files this week. Everything is quiet." in page.text
     assert "No email checked yet" in page.text
 
 

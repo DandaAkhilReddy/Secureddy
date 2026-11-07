@@ -36,6 +36,7 @@ from reddysec.store.models import (
     DetonationRow,
     FeedbackReasonRow,
     HoldHeartbeat,
+    MailboxDailyCounterRow,
     MailboxRow,
     MailboxSecret,
     MailboxTaskRow,
@@ -240,6 +241,19 @@ async def list_retrying_mailboxes(session: AsyncSession, errors: Iterable[str]) 
         .order_by(MailboxRow.created_at)
     )
     return list((await session.execute(stmt)).scalars())
+
+
+async def list_paused_hold_mailboxes(session: AsyncSession) -> list[MailboxRow]:
+    """Paused HOLD mailboxes whose hold rule may still be installed (labels set
+    up). Nobody checks their mail while paused, so the worker removes the rule
+    and releases what is held; resuming sets the mailbox up again."""
+    stmt = (
+        select(MailboxRow)
+        .where(MailboxRow.status == "paused", MailboxRow.mode == "hold")
+        .options(selectinload(MailboxRow.secret))
+        .order_by(MailboxRow.created_at)
+    )
+    return [m for m in (await session.execute(stmt)).scalars() if m.labels]
 
 
 async def list_mailboxes(session: AsyncSession, *, user_id: str | None = None) -> list[MailboxRow]:
@@ -800,6 +814,77 @@ async def provider_ids_since(session: AsyncSession, mailbox_id: str, since: date
         MessageRow.mailbox_id == mailbox_id, MessageRow.received_at >= since
     )
     return set((await session.execute(stmt)).scalars())
+
+
+# ------------------------------------------------ text-only email (skipped)
+# The per-person choice "Also watch text-only emails for money scams" lives in
+# ``user_preferences`` under this key ("on" / "off"; default off). The web
+# layer (``web.preferences``) owns the allowed values; the worker only reads.
+PREF_WATCH_TEXT_SCAMS = "text_scams"
+
+
+async def get_user_preference(session: AsyncSession, user_id: str, key: str) -> str:
+    """The stored value of one preference, or ``""``."""
+    from reddysec.store.models import UserPreferenceRow
+
+    value = (
+        await session.execute(
+            select(UserPreferenceRow.value).where(UserPreferenceRow.user_id == user_id, UserPreferenceRow.key == key)
+        )
+    ).scalar_one_or_none()
+    return value or ""
+
+
+async def watches_text_scams(session: AsyncSession, user_id: str) -> bool:
+    return await get_user_preference(session, user_id, PREF_WATCH_TEXT_SCAMS) == "on"
+
+
+def utc_day(at: datetime | None = None) -> str:
+    return (aware(at) or utcnow()).strftime("%Y-%m-%d")
+
+
+async def bump_skipped_text_only(
+    session: AsyncSession, mailbox_id: str, *, at: datetime | None = None, by: int = 1
+) -> MailboxDailyCounterRow:
+    """Add to today's operations-only count of ignored text-only emails."""
+    day = utc_day(at)
+    row = (
+        await session.execute(
+            select(MailboxDailyCounterRow).where(
+                MailboxDailyCounterRow.mailbox_id == mailbox_id, MailboxDailyCounterRow.day == day
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = MailboxDailyCounterRow(id=new_id("cnt"), mailbox_id=mailbox_id, day=day, skipped_text_only=0)
+        session.add(row)
+    row.skipped_text_only = (row.skipped_text_only or 0) + by
+    row.updated_at = utcnow()
+    await session.flush()
+    return row
+
+
+async def skipped_text_only(session: AsyncSession, mailbox_id: str, *, since_day: str = "") -> int:
+    """Operations: ignored text-only emails of one mailbox since ``since_day``."""
+    stmt = select(func.coalesce(func.sum(MailboxDailyCounterRow.skipped_text_only), 0)).where(
+        MailboxDailyCounterRow.mailbox_id == mailbox_id, MailboxDailyCounterRow.day >= since_day
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def forget_message(session: AsyncSession, message_row: MessageRow) -> None:
+    """Delete one stored email and what hangs off it (notifications, feedback
+    reasons, detonation records, its "verdict" audit entries). Used when a
+    re-check finds an email has nothing to click or open."""
+    from sqlalchemy import delete
+
+    mid = message_row.id
+    await session.execute(delete(NotificationRow).where(NotificationRow.message_id == mid))
+    await session.execute(delete(FeedbackReasonRow).where(FeedbackReasonRow.message_id == mid))
+    await session.execute(delete(DetonationRow).where(DetonationRow.message_id == mid))
+    await session.execute(delete(AuditLog).where(AuditLog.action == "verdict", AuditLog.target == mid))
+    await session.execute(delete(MessageRow).where(MessageRow.id == mid))
+    await session.flush()
 
 
 # ------------------------------------------------------------ mailbox tasks

@@ -137,6 +137,14 @@ param microsoftClientId string = ''
 
 @description('Yahoo OpenID Connect client id; its secret is rs-yahoo-client-secret in Key Vault.')
 param yahooClientId string = ''
+@description('While no account is an admin, the account with this email becomes one (RS_BOOTSTRAP_ADMIN_EMAIL).')
+param bootstrapAdminEmail string = ''
+@description('Most accounts this Secureddy accepts (RS_MAX_USERS). Free: no payments anywhere.')
+@minValue(1)
+param maxUsers int = 5
+@description('invite_only: a new account needs an invite (Admin -> People or `reddysec invite`); open: anyone, up to maxUsers.')
+@allowed(['invite_only', 'open'])
+param signupMode string = 'invite_only'
 @description('RS_ANTHROPIC_API_KEY from Key Vault secret rs-anthropic-api-key.')
 param anthropicEnabled bool = false
 @description('RS_LLM_PROVIDER when Azure OpenAI is off (none | anthropic | azure_foundry).')
@@ -437,6 +445,9 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
     googlePubsubTopic: googlePubsubTopic
     microsoftClientId: microsoftClientId
     yahooClientId: yahooClientId
+    bootstrapAdminEmail: bootstrapAdminEmail
+    maxUsers: maxUsers
+    signupMode: signupMode
     anthropicEnabled: anthropicEnabled
     llmProvider: llmProvider
     assistantProvider: assistantProvider

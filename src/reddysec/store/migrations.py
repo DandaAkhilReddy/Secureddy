@@ -16,6 +16,16 @@ only what is still missing:
    move its twin's messages, contacts, sender choices, stats, tasks and audit
    rows onto it, then delete the twin and its credential.
 3. Create the unique index that stops duplicates coming back.
+4. Forget stored text-only emails (``purge_text_only_messages``). Secureddy
+   only checks email with something to click or open
+   (``analysis.actionable``); rows stored before that rule, with no link, no
+   file and no money-scam (BEC) finding, are deleted with their
+   notifications. Quarantined rows and rows waiting on the worker or the
+   client are kept, so nothing can be trapped. Idempotent: a second run finds
+   nothing. ``reddysec purge-text-only`` runs the same step by hand.
+5. First admin (``promote_bootstrap_admin``): while no active account is an
+   admin, the account whose email equals ``Settings.bootstrap_admin_email``
+   becomes one. Nobody else is ever promoted automatically.
 
 Concurrency: the web app and the worker may start together. On PostgreSQL the
 whole upgrade (with ``create_all``) runs in one transaction that first takes
@@ -41,6 +51,7 @@ from .models import (
     DetonationRow,
     FeedbackReasonRow,
     HoldHeartbeat,
+    MailboxDailyCounterRow,
     MailboxRow,
     MailboxSecret,
     MailboxTaskRow,
@@ -49,6 +60,7 @@ from .models import (
     ReadingRoomRow,
     SenderFeedbackRow,
     SenderTrustStatsRow,
+    UserRow,
 )
 
 log = get_logger(__name__)
@@ -68,18 +80,25 @@ class ColumnChange:
         return f"widened {self.table}.{self.column} from {self.old} to {self.new}"
 
 
-async def migrate(engine: AsyncEngine, *, create_tables: bool = True) -> list[str]:
+async def migrate(
+    engine: AsyncEngine, *, create_tables: bool = True, bootstrap_admin_email: str | None = None
+) -> list[str]:
     """Create missing tables (optional) and apply every pending upgrade, under
-    the advisory lock on PostgreSQL. Returns a line per change made."""
+    the advisory lock on PostgreSQL. Returns a line per change made.
+    ``bootstrap_admin_email`` defaults to ``Settings.bootstrap_admin_email``."""
+    if bootstrap_admin_email is None:
+        from reddysec.config import get_settings  # lazy: tests build settings per case
+
+        bootstrap_admin_email = get_settings().bootstrap_admin_email
     async with engine.begin() as conn:
         if conn.dialect.name == "postgresql":
             await conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADVISORY_LOCK_KEY})
         if create_tables:
             await conn.run_sync(Base.metadata.create_all)
-        return await conn.run_sync(upgrade)
+        return await conn.run_sync(lambda c: upgrade(c, bootstrap_admin_email=bootstrap_admin_email or ""))
 
 
-def upgrade(conn: Connection) -> list[str]:
+def upgrade(conn: Connection, *, bootstrap_admin_email: str = "") -> list[str]:
     """Run every step on an open connection (inside the caller's transaction)."""
     changes: list[str] = []
     if conn.dialect.name == "postgresql":
@@ -87,6 +106,10 @@ def upgrade(conn: Connection) -> list[str]:
     changes += merge_duplicate_mailboxes(conn)
     if ensure_mailbox_unique_index(conn):
         changes.append(f"created unique index {MAILBOX_UNIQUE_INDEX}")
+    purged = purge_text_only_messages(conn)
+    if purged:
+        changes.append(f"removed {purged} stored text-only email{'s' if purged != 1 else ''} (nothing to click or open)")
+    changes += promote_bootstrap_admin(conn, bootstrap_admin_email)
     for change in changes:
         log.info("db.migrated", change=change)
     if not changes:
@@ -225,6 +248,9 @@ def _merge_mailbox(conn: Connection, *, keep: str, stale: str) -> int:
         conn.execute(update(table).where(table.c.mailbox_id == stale).values(mailbox_id=keep))
     hb = HoldHeartbeat.__table__
     conn.execute(delete(hb).where(hb.c.mailbox_id == stale))
+    # Operations-only counters: the twin's are simply dropped.
+    counters = MailboxDailyCounterRow.__table__
+    conn.execute(delete(counters).where(counters.c.mailbox_id == stale))
     # A credential is encrypted to its mailbox id, so it cannot move; the kept
     # row was chosen for having one whenever any row did.
     conn.execute(delete(MailboxSecret.__table__).where(MailboxSecret.__table__.c.mailbox_id == stale))
@@ -251,8 +277,78 @@ def ensure_mailbox_unique_index(conn: Connection) -> bool:
     return True
 
 
+# ------------------------------------------------------- text-only email
+# Analysed states a text-only row may be forgotten in. Rows waiting on the
+# worker (pending, analyzing, held_for_review) or on a client request, and
+# failed rows, stay: deleting them could hide a held or quarantined email.
+PURGEABLE_STATES = ("done", "reviewed", "released_by_deadman")
+
+
+def text_only_message_ids(conn: Connection) -> list[str]:
+    """Stored emails with no link, no file and no BEC finding (see step 4)."""
+    from reddysec.analysis.actionable import stored_verdict_is_text_only  # lazy: analysis is heavy
+
+    m = MessageRow.__table__
+    rows = conn.execute(
+        select(m.c.id, m.c.verdict).where(
+            m.c.url_count == 0,
+            m.c.attachment_count == 0,
+            m.c.quarantined.is_(False),
+            m.c.state.in_(PURGEABLE_STATES),
+            m.c.verdict.is_not(None),
+        )
+    ).all()
+    return [row.id for row in rows if stored_verdict_is_text_only(row.verdict)]
+
+
+def purge_text_only_messages(conn: Connection, *, dry_run: bool = False) -> int:
+    """Delete stored text-only emails and what hangs off them: notifications,
+    feedback reasons, detonation records and their "verdict" audit entries
+    (the emails are not counted anywhere any more). Our mailbox label on them
+    is left alone. Returns how many emails were (or, dry run, would be) removed."""
+    ids = text_only_message_ids(conn)
+    if dry_run or not ids:
+        return len(ids)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start: start + 500]
+        conn.execute(delete(NotificationRow.__table__).where(NotificationRow.__table__.c.message_id.in_(chunk)))
+        conn.execute(delete(FeedbackReasonRow.__table__).where(FeedbackReasonRow.__table__.c.message_id.in_(chunk)))
+        conn.execute(delete(DetonationRow.__table__).where(DetonationRow.__table__.c.message_id.in_(chunk)))
+        audit = AuditLog.__table__
+        conn.execute(delete(audit).where(audit.c.action == "verdict", audit.c.target.in_(chunk)))
+        conn.execute(delete(MessageRow.__table__).where(MessageRow.__table__.c.id.in_(chunk)))
+    log.info("db.purged_text_only", count=len(ids))
+    return len(ids)
+
+
+# ------------------------------------------------------------ first admin
+def promote_bootstrap_admin(conn: Connection, email: str) -> list[str]:
+    """While no active account is an admin, make the account with the
+    bootstrap email one. Existing production accounts keep working: they are
+    never disabled or demoted here."""
+    email = (email or "").strip().lower()
+    if not email:
+        return []
+    users = UserRow.__table__
+    admins = conn.execute(
+        select(func.count()).select_from(users).where(users.c.role == "admin", users.c.disabled.is_(False))
+    ).scalar_one()
+    if admins:
+        return []
+    result = conn.execute(
+        update(users).where(users.c.login_email == email, users.c.disabled.is_(False)).values(role="admin")
+    )
+    if not result.rowcount:
+        return []
+    return [f"made {email} an admin (bootstrap admin email)"]
+
+
 __all__ = [
     "ADVISORY_LOCK_KEY",
+    "PURGEABLE_STATES",
+    "promote_bootstrap_admin",
+    "purge_text_only_messages",
+    "text_only_message_ids",
     "ColumnChange",
     "ensure_mailbox_unique_index",
     "merge_duplicate_mailboxes",

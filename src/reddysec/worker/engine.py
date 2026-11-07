@@ -15,6 +15,14 @@ can never starve the protection of new mail. "Check my recent mail"
 (``mailbox_tasks`` backfills) is rationed the same way: one batch of
 ``backfill_batch_size`` per mailbox per cycle, after new mail.
 
+Only email with something to click or open is checked
+(``analysis.actionable``). A text-only email is ignored completely: no stored
+row, no label, no count the person sees, no notification; in HOLD mode it is
+released at once. The one exception is the person's opt-in "Also watch
+text-only emails for money scams": then a text-only email that trips the
+wire-fraud / gift-card heuristics is checked like any other. Ignored emails
+only bump an operations counter (``mailbox_daily_counters``).
+
 One mailbox failing never stops the others, and never fails silently: after
 ``mailbox_failures_before_error`` failed cycles in a row the mailbox shows as
 needing attention with a plain-English ``last_error``, and the worker keeps
@@ -28,6 +36,7 @@ those packages exist.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -86,6 +95,10 @@ class CursorSaveError(Exception):
 Parser = Callable[..., ParsedMessage]
 Analyzer = Callable[[ParsedMessage, Any], Awaitable[Verdict]]
 ContextFactory = Callable[..., Any]
+Actionable = Callable[[ParsedMessage], bool]
+# Text-only provider ids remembered per mailbox so a backfill does not fetch
+# them again (they are never stored). In memory: a restart only costs a refetch.
+TEXT_ONLY_MEMORY = 5000
 
 
 @dataclass
@@ -97,6 +110,7 @@ class CycleStats:
     restored: int = 0
     client_requests: int = 0
     backfilled: int = 0
+    text_only: int = 0  # ignored: nothing to click or open (operations only)
     deferred: int = 0  # mailboxes skipped this cycle while their retry pause runs
     mailbox_errors: list[str] = field(default_factory=list)
 
@@ -111,6 +125,18 @@ def _default_analyzer() -> Analyzer:
     from reddysec.analysis.pipeline import analyze  # lazy: built by another team
 
     return analyze
+
+
+def _default_actionable() -> Actionable:
+    from reddysec.analysis.actionable import is_actionable  # lazy: built by another team
+
+    return is_actionable
+
+
+def _default_text_scam_check() -> Callable[..., list[Signal]]:
+    from reddysec.analysis.actionable import text_scam_signals
+
+    return text_scam_signals
 
 
 def _default_context_factory() -> ContextFactory:
@@ -229,6 +255,8 @@ class Worker:
         http: httpx.AsyncClient | None = None,
         clock: Callable[[], datetime] = utcnow,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        actionable: Actionable | None = None,
+        text_scam_check: Callable[..., list[Signal]] | None = None,
     ):
         self._db = db
         self._settings = settings
@@ -252,6 +280,9 @@ class Worker:
         # In memory on purpose: a restarted worker retries everything at once.
         self._failures: dict[str, int] = {}
         self._retry_at: dict[str, datetime] = {}
+        self._actionable = actionable
+        self._text_scam_check = text_scam_check
+        self._text_only_seen: dict[str, OrderedDict[str, None]] = {}
 
     # ------------------------------------------------------------ wiring
     @property
@@ -265,6 +296,18 @@ class Worker:
         if self._analyzer is None:
             self._analyzer = _default_analyzer()
         return self._analyzer
+
+    @property
+    def actionable(self) -> Actionable:
+        if self._actionable is None:
+            self._actionable = _default_actionable()
+        return self._actionable
+
+    @property
+    def text_scam_check(self) -> Callable[..., list[Signal]]:
+        if self._text_scam_check is None:
+            self._text_scam_check = _default_text_scam_check()
+        return self._text_scam_check
 
     @property
     def context_factory(self) -> ContextFactory:
@@ -364,8 +407,35 @@ class Worker:
                 await self._mailbox_failure(mailbox, ERROR_CHECK_FAILED, f"{type(exc).__name__}: {exc}")
             else:
                 self._forget_failures(mailbox.id)
+        stats.restored += await self._release_paused_hold()
         self.cycles += 1
         return stats
+
+    async def _release_paused_hold(self) -> int:
+        """A HOLD mailbox that was paused (by its owner, or by an admin turning
+        the account off) is no longer checked, so its hold rule would trap new
+        mail forever, and the dead man's switch only watches active mailboxes.
+        Remove the rule, release what is held, and forget the setup so that
+        resuming installs the rule again. Returns how many emails came back."""
+        async with self._db.session() as session:
+            paused = await repo.list_paused_hold_mailboxes(session)
+        released = 0
+        for mailbox in paused:
+            try:
+                connector = await self._connector_factory(mailbox)
+                await connector.teardown()
+                count = await connector.release_all_pending()
+            except Exception as exc:  # noqa: BLE001 - retried next cycle; one mailbox must not stop others
+                log.warning("worker.paused_hold_release_failed", mailbox_id=mailbox.id, error=str(exc)[:300])
+                continue
+            async with self._db.session() as session:
+                await repo.set_mailbox_labels(session, mailbox.id, {})
+                await repo.audit(
+                    session, None, "system", "hold_released_on_pause", mailbox.id, details={"released": count}
+                )
+            log.info("worker.paused_hold_released", mailbox_id=mailbox.id, released=count)
+            released += count
+        return released
 
     def _forget_failures(self, mailbox_id: str) -> None:
         self._failures.pop(mailbox_id, None)
@@ -461,23 +531,29 @@ class Worker:
 
     async def _process_new(
         self, mailbox: MailboxRow, connector: MailboxConnector, messages: Sequence[RawMessage], stats: CycleStats
-    ) -> int:
-        """Analyse each message we have not finished before. Returns how many
-        were attempted (checked or failed)."""
+    ) -> tuple[int, int]:
+        """Analyse each message we have not finished before. Returns (checked
+        or failed, ignored as text-only)."""
         attempted = 0
+        text_only = 0
         for raw in messages:
             async with self._db.session() as session:
                 existing = await repo.get_message_by_provider_id(session, mailbox.id, raw.provider_message_id)
             if existing is not None and existing.state not in repo.REPROCESSABLE_STATES:
                 stats.skipped += 1
                 continue
-            attempted += 1
             try:
-                await self.process_message(mailbox, connector, raw)
+                row = await self.process_message(mailbox, connector, raw)
+                if row is None:
+                    text_only += 1
+                    stats.text_only += 1
+                    continue
+                attempted += 1
                 stats.messages += 1
             except ConnectorError:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep going with the next message
+                attempted += 1
                 stats.failed += 1
                 log.exception(
                     "worker.message_crashed",
@@ -485,7 +561,9 @@ class Worker:
                     provider_message_id=raw.provider_message_id,
                 )
                 await self._message_crashed(mailbox, connector, raw, exc)
-        return attempted
+        if text_only:
+            await self._count_text_only(mailbox, text_only)
+        return attempted, text_only
 
     async def _save_cursor(self, mailbox: MailboxRow, cursor: str | None) -> None:
         try:
@@ -527,6 +605,7 @@ class Worker:
         since = repo.aware(task.since) or self._clock()
         async with self._db.session() as session:
             known = await repo.provider_ids_since(session, mailbox.id, since - timedelta(days=1))
+        known |= set(self._text_only_seen.get(mailbox.id, ()))
         try:
             raws = list(await backfill(since, batch, skip=known))[:batch]
         except ConnectorError as exc:
@@ -536,8 +615,8 @@ class Worker:
                 await repo.record_backfill_batch(session, task.id, processed=0, finished=True, error=str(exc))
             log.warning("worker.backfill_failed", mailbox_id=mailbox.id, task_id=task.id, error=str(exc))
             return 0
-        attempted = await self._process_new(mailbox, connector, raws, stats)
-        finished = len(raws) < batch or attempted == 0
+        attempted, text_only = await self._process_new(mailbox, connector, raws, stats)
+        finished = len(raws) < batch or attempted + text_only == 0
         async with self._db.session() as session:
             row = await repo.record_backfill_batch(session, task.id, processed=attempted, finished=finished)
             if row is not None and row.state == repo.TASK_DONE and row.processed:
@@ -672,6 +751,16 @@ class Worker:
         except Exception as exc:  # noqa: BLE001 - one bad message must not stop the others
             await self._rescore_failed(mailbox, row, f"parse: {type(exc).__name__}")
             return False
+        if not row.quarantined and not self.actionable(parsed) and not await self._text_scam(mailbox, parsed):
+            # Nothing to click or open: we do not keep it (a quarantined one is
+            # re-checked normally so it can never be stranded in Quarantine).
+            async with self._db.session() as session:
+                fresh = await repo.get_message(session, row.id)
+                if fresh is not None:
+                    await repo.forget_message(session, fresh)
+            await self._count_text_only(mailbox, 1)
+            log.info("worker.rescore_text_only_forgotten", mailbox_id=mailbox.id, message_id=row.id)
+            return True
         async with self._db.session() as session:
             history = (
                 await repo.sender_history(session, mailbox.id, parsed.from_address) if parsed.from_address else None
@@ -733,7 +822,9 @@ class Worker:
     # ---------------------------------------------------------- message
     async def process_message(
         self, mailbox: MailboxRow, connector: MailboxConnector, raw: RawMessage
-    ) -> MessageRow:
+    ) -> MessageRow | None:
+        """Check one new email. Returns its row, or ``None`` when it had
+        nothing to click or open and was ignored (see the module docstring)."""
         policy = policy_for(mailbox)
         hold = policy.mode is ProtectionMode.HOLD
         parsed = self.parser(
@@ -743,6 +834,9 @@ class Worker:
             received_at=raw.received_at,
             thread_id=raw.thread_id,
         )
+        if not self.actionable(parsed) and not await self._text_scam(mailbox, parsed):
+            await self._ignore_text_only(mailbox, connector, raw, hold=hold)
+            return None
 
         async with self._db.session() as session:
             row = await repo.upsert_message(session, parsed, raw, state=repo.STATE_ANALYZING)
@@ -816,6 +910,60 @@ class Worker:
                 f"Outcome: {outcome}. State: {state}. Level: {verdict.level.value}.\n{self._notifier.message_url(row.id)}",
             )
         return row
+
+    # -------------------------------------------------------- text-only
+    async def _text_scam(self, mailbox: MailboxRow, parsed: ParsedMessage) -> bool:
+        """A text-only email we check anyway: the person opted in to "Also
+        watch text-only emails for money scams" and it trips those checks."""
+        async with self._db.session() as session:
+            if not await repo.watches_text_scams(session, mailbox.user_id):
+                return False
+            history = (
+                await repo.sender_history(session, mailbox.id, parsed.from_address) if parsed.from_address else None
+            )
+            feedback = await repo.load_client_feedback(session, mailbox.id)
+        try:
+            found = self.text_scam_check(parsed, history, feedback=feedback)
+        except Exception:  # noqa: BLE001 - a heuristic bug must not stop the mailbox
+            log.exception("worker.text_scam_check_failed", mailbox_id=mailbox.id)
+            return False
+        if found:
+            log.info("worker.text_only_scam", mailbox_id=mailbox.id, codes=[s.code for s in found][:5])
+        return bool(found)
+
+    async def _ignore_text_only(
+        self, mailbox: MailboxRow, connector: MailboxConnector, raw: RawMessage, *, hold: bool
+    ) -> None:
+        """Nothing to click or open: no row, no label, no notification. In
+        HOLD mode the email is released at once (never trapped), and a row
+        left over from an interrupted earlier attempt is forgotten."""
+        if hold:
+            try:
+                await connector.release(raw.provider_message_id)
+            except ConnectorError as exc:
+                if exc.retryable:
+                    raise
+                log.warning(
+                    "worker.text_only_release_failed", mailbox_id=mailbox.id, error=str(exc)[:300]
+                )
+        async with self._db.session() as session:
+            stale = await repo.get_message_by_provider_id(session, mailbox.id, raw.provider_message_id)
+            if stale is not None:
+                await repo.forget_message(session, stale)
+        seen = self._text_only_seen.setdefault(mailbox.id, OrderedDict())
+        seen[raw.provider_message_id] = None
+        seen.move_to_end(raw.provider_message_id)
+        while len(seen) > TEXT_ONLY_MEMORY:
+            seen.popitem(last=False)
+        log.debug("worker.text_only_ignored", mailbox_id=mailbox.id, hold=hold)
+
+    async def _count_text_only(self, mailbox: MailboxRow, count: int) -> None:
+        """Operations-only counter; a database hiccup here must not cost a cycle."""
+        try:
+            async with self._db.session() as session:
+                await repo.bump_skipped_text_only(session, mailbox.id, at=self._clock(), by=count)
+        except SQLAlchemyError:
+            log.warning("worker.text_only_count_failed", mailbox_id=mailbox.id)
 
     async def _notify_trust_changed(self, user: Any, row: MessageRow, verdict: Verdict) -> None:
         """A sender the client trusts sent something we would not let through:

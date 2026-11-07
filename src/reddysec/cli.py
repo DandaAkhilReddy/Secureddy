@@ -11,6 +11,10 @@ add-user            create a user (principal, family, assistant, concierge, admi
 add-imap-mailbox    attach a Yahoo / iCloud / Outlook.com / generic IMAP mailbox
 release-all         manually release every held message of a mailbox (dead man by hand)
 list-mailboxes      show mailboxes and their state
+invite              invite an email address (invite-only sign-up, max_users places)
+make-admin          make an existing account an admin
+list-users          show accounts, their role and how many places are used
+purge-text-only     forget stored emails with nothing to click or open (also runs at startup)
 
 Server-starting commands delegate to module-level functions (``_serve_web``,
 ``_run_services``) so tests can check the argument wiring without binding ports.
@@ -31,7 +35,7 @@ from reddysec.mail.factory import connector_factory_from_settings
 from reddysec.mail.imap import IMAP_PRESETS, ImapCredentials
 from reddysec.mail.vault import KIND_IMAP_PASSWORD, CredentialVault, cipher_from_settings
 from reddysec.models import Provider, Role
-from reddysec.store import repo
+from reddysec.store import people, repo
 from reddysec.store.db import Database
 from reddysec.worker.deadman import DeadManSwitch
 from reddysec.worker.notify import Notifier
@@ -237,6 +241,101 @@ def cmd_list_mailboxes(args: argparse.Namespace, settings: Settings) -> int:
     return asyncio.run(go())
 
 
+# ------------------------------------------------------------------ people
+def cmd_invite(args: argparse.Namespace, settings: Settings) -> int:
+    email = people.normalize_email(args.email)
+    if not people.looks_like_email(email):
+        print(f"{args.email!r} is not an email address", file=sys.stderr)
+        return 2
+
+    async def go() -> int:
+        db = Database(settings.database_url)
+        try:
+            async with db.session() as session:
+                if await repo.get_user_by_email(session, email) is not None:
+                    print(f"{email} already has an account")
+                    return 0
+                used = await people.active_user_count(session)
+                if used >= settings.max_users:
+                    print(f"all {settings.max_users} places are used; disable an account first", file=sys.stderr)
+                    return 1
+                invite, created = await people.create_invite(session, email, invited_by=None)
+                if created:
+                    await repo.audit(session, None, "admin", "invite_created", target=invite.id,
+                                     details={"email": email, "via": "cli"})
+            print(f"{'invited' if created else 'already invited'}: {email} ({used} of {settings.max_users} places used)")
+            return 0
+        finally:
+            await db.dispose()
+
+    return asyncio.run(go())
+
+
+def cmd_make_admin(args: argparse.Namespace, settings: Settings) -> int:
+    async def go() -> int:
+        db = Database(settings.database_url)
+        try:
+            async with db.session() as session:
+                user = await repo.get_user_by_email(session, args.email)
+                if user is None:
+                    print(f"no account with email {args.email}; they must sign in once first", file=sys.stderr)
+                    return 1
+                if user.role == "admin":
+                    print(f"{user.login_email} is already an admin")
+                    return 0
+                previous, user.role = user.role, "admin"
+                await repo.audit(session, None, "admin", "role_changed", target=user.id,
+                                 details={"email": user.login_email, "from": previous, "to": "admin", "via": "cli"})
+            print(f"{user.login_email} is now an admin")
+            return 0
+        finally:
+            await db.dispose()
+
+    return asyncio.run(go())
+
+
+def cmd_list_users(args: argparse.Namespace, settings: Settings) -> int:
+    from sqlalchemy import select
+
+    from reddysec.store.models import UserRow
+
+    async def go() -> int:
+        db = Database(settings.database_url)
+        try:
+            async with db.session() as session:
+                users = list((await session.execute(select(UserRow).order_by(UserRow.created_at))).scalars())
+                used = await people.active_user_count(session)
+                invites = await people.list_invites(session)
+        finally:
+            await db.dispose()
+        print(f"{used} of {settings.max_users} places used · sign-up: {settings.signup_mode}")
+        print(f"{'id':<30} {'role':<10} {'state':<8} email")
+        for u in users:
+            print(f"{u.id:<30} {u.role:<10} {'off' if u.disabled else 'on':<8} {u.login_email}")
+        for inv in invites:
+            print(f"{'(invited)':<30} {'':<10} {'waiting':<8} {inv.email}")
+        return 0
+
+    return asyncio.run(go())
+
+
+def cmd_purge_text_only(args: argparse.Namespace, settings: Settings) -> int:
+    from reddysec.store.migrations import purge_text_only_messages
+
+    async def go() -> int:
+        db = Database(settings.database_url)
+        try:
+            async with db.engine.begin() as conn:
+                return await conn.run_sync(lambda c: purge_text_only_messages(c, dry_run=args.dry_run))
+        finally:
+            await db.dispose()
+
+    count = asyncio.run(go())
+    verb = "would remove" if args.dry_run else "removed"
+    print(f"{verb} {count} stored text-only email{'s' if count != 1 else ''} (nothing to click or open)")
+    return 0
+
+
 # ------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="reddysec", description="Secureddy operations")
@@ -286,6 +385,20 @@ def build_parser() -> argparse.ArgumentParser:
     release.set_defaults(func=cmd_release_all)
 
     sub.add_parser("list-mailboxes", help="list mailboxes").set_defaults(func=cmd_list_mailboxes)
+
+    invite = sub.add_parser("invite", help="invite an email address to open an account")
+    invite.add_argument("email")
+    invite.set_defaults(func=cmd_invite)
+
+    make_admin = sub.add_parser("make-admin", help="make an existing account an admin")
+    make_admin.add_argument("email")
+    make_admin.set_defaults(func=cmd_make_admin)
+
+    sub.add_parser("list-users", help="list accounts and open invites").set_defaults(func=cmd_list_users)
+
+    purge = sub.add_parser("purge-text-only", help="forget stored emails with nothing to click or open")
+    purge.add_argument("--dry-run", action="store_true", help="only count them")
+    purge.set_defaults(func=cmd_purge_text_only)
     return parser
 
 

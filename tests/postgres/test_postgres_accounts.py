@@ -52,7 +52,7 @@ async def test_sessions_lock_passkeys_preferences_round_trip(pg_db):
         found = await find_session(s, token, datetime.now(UTC))
         assert found[1] is not None and found[1].kind == "pin"
         prefs = await preferences.get_preferences(s, user.id)
-        assert prefs == {"inbox_view": "separate", "selected_mailbox": "mbx_" + "A" * 26, "period": "7d", "theme": ""}
+        assert prefs == {"inbox_view": "separate", "selected_mailbox": "mbx_" + "A" * 26, "period": "7d", "theme": "", "text_scams": "off"}
         result = await applock.try_unlock(s, user.id, row.id, "000000")
         assert result.outcome == "wrong"
         assert await revoke_user_sessions(s, user.id, "test") == 1

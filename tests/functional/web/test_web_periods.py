@@ -25,19 +25,19 @@ async def test_period_switch_changes_cards_sentence_sparklines_and_list(client, 
 
     week = client.get("/").text
     assert 'aria-current="true">7 days</a>' in week
-    assert "We checked 2 emails this week. 1 looked suspicious." in week
+    assert "We checked 2 emails with links or files this week. 1 looked suspicious." in week
     assert "Two weeks ago" not in week and 'aria-label="Last 7 days: ' in week
 
     today = client.get("/?period=today").text
-    assert "We checked 2 emails today." in today and 'aria-label="Today, by hour: ' in today
+    assert "We checked 2 emails with links or files today." in today and 'aria-label="Today, by hour: ' in today
     assert 'class="stat-period">Today<' in today
 
     month = client.get("/?period=1m").text
-    assert "We checked 3 emails this month. 2 looked suspicious." in month and "Two weeks ago" in month
+    assert "We checked 3 emails with links or files this month. 2 looked suspicious." in month and "Two weeks ago" in month
     assert 'aria-label="Last 30 days: ' in month and "Three months ago" not in month
 
     year = client.get("/?period=1y").text
-    assert "We checked 4 emails this year. 3 looked suspicious. We moved 1 out of your inbox." in year
+    assert "We checked 4 emails with links or files this year. 3 looked suspicious. We moved 1 out of your inbox." in year
     assert 'aria-label="Last 12 months: ' in year and "1 moved out of your inbox" in year
     assert '<span class="num">4</span> emails checked' in year
     assert (await _prefs(db, user.id))["period"] == "1y"
@@ -46,7 +46,7 @@ async def test_period_switch_changes_cards_sentence_sparklines_and_list(client, 
     again = client.get("/").text
     assert 'aria-current="true">1 year</a>' in again
     only_yahoo = client.get(f"/?mailbox={yahoo.id}").text
-    assert "We checked 1 email this year." in only_yahoo
+    assert "We checked 1 email with links or files this year." in only_yahoo
     assert f'href="/?mailbox={yahoo.id}&amp;period=today"' in only_yahoo  # period links keep the inbox
     assert 'href="/?period=1y&amp;mailbox=all"' in only_yahoo  # inbox links keep the period
     assert f"/messages?tab=suspicious&amp;period=1y&amp;mailbox={yahoo.id}" in only_yahoo
@@ -59,7 +59,7 @@ async def test_today_uses_the_browser_time_zone(client, seed, login):
     login(client, "tz@example.com")
     client.cookies.set("rs_tz", "Pacific/Kiritimati")  # UTC+14
     page = client.get("/?period=today").text
-    assert "We checked 1 email today." in page
+    assert "We checked 1 email with links or files today." in page
     client.cookies.set("rs_tz", "Not/AZone")  # ignored: UTC
     assert client.get("/?period=today").status_code == 200
 

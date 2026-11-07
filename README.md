@@ -19,6 +19,12 @@ so you can run it too.
   Yahoo in three short steps. Each mailbox has the same options: open inbox,
   pause, reconnect, re-check the last 7 days, trusted and blocked senders,
   sign out of that mailbox. See them together in one list or separately.
+- **Only email with something to click or open.** An email with a link, a
+  button, a QR code or a file is checked. Plain text email has nothing for
+  the sandbox to open, so it is not checked, not labelled and not counted.
+  In Settings you can also turn on "Also watch text-only emails for money
+  scams" (off by default) to catch wire-transfer and gift-card requests that
+  come with no link at all.
 - **Checks before you click.** Sender checks, look-alike domains, QR codes,
   dangerous attachments, wire-fraud wording, and a real Chromium sandbox that
   follows every redirect. Every email gets a verdict, Checked or Suspicious,
@@ -51,6 +57,18 @@ so you can run it too.
   days.
 - **Light, dark or match the device**, chosen in Settings and remembered for
   your account.
+
+## Who can use it
+
+Secureddy is free (no payments anywhere) and run for a handful of people:
+at most `RS_MAX_USERS` accounts (5 by default). Sign-up is invite-only by
+default: an admin invites an email address on the **People** page (or with
+`reddysec invite <email>`), and that person signs in with Google, Microsoft or
+Yahoo using exactly that verified address. People who already have an
+account are never locked out. On a new server, the account whose email is
+`RS_BOOTSTRAP_ADMIN_EMAIL` becomes the first admin when it signs in. Admins
+can withdraw invites, turn accounts off and on, and change roles; every
+action is in the audit log.
 
 ## How it fits together
 
@@ -142,6 +160,9 @@ most important ones:
 | `RS_ANTHROPIC_API_KEY` | Claude with a static key (fallback; prefer keyless) |
 | `RS_SESSION_IDLE_DAYS` / `RS_SESSION_ABSOLUTE_DAYS` | How long a device stays signed in (90 / 365) |
 | `RS_HOLD_DEAD_MAN_MINUTES` | Hold mode releases everything if checks stop for this long |
+| `RS_MAX_USERS` | Most accounts this server accepts (5) |
+| `RS_SIGNUP_MODE` | `invite_only` (default) or `open` (anyone, up to the limit) |
+| `RS_BOOTSTRAP_ADMIN_EMAIL` | While nobody is an admin, this account becomes one at sign-in |
 
 ## Security
 
@@ -152,11 +173,14 @@ Secrets are never committed: gitleaks runs in CI and as a pre-commit hook.
 ## Tests
 
 ```bash
-pytest                    # unit + functional
-pytest -m integration     # real Chromium: sandbox, Reading Room, the web app in a browser
-pytest -m postgres        # against a real PostgreSQL
+pytest -m "not integration"   # unit + functional (+ PostgreSQL when it is installed)
+pytest -m integration         # real Chromium: sandbox, Reading Room, the web app in a browser
+pytest -m postgres            # against a real PostgreSQL
 pytest --cov=reddysec
 ```
+
+[TESTING.md](TESTING.md) says how to run each suite; [docs/test-plan.md](docs/test-plan.md)
+lists every feature and the tests that cover it.
 
 ## Roadmap
 

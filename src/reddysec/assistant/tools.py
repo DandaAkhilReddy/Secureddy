@@ -59,7 +59,8 @@ _MAILBOX = {"type": "string", "description": "Optional: one of the person's emai
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         "search_messages",
-        "Search the person's checked emails by words in the sender, subject, account or our verdict reasons "
+        "Search the person's checked emails (emails with links or files) by words in the sender, subject, account "
+        "or our verdict reasons "
         "(e.g. 'walmart', 'invoice', 'gift card'). Use sort='risk' for 'most suspicious first'.",
         {
             "type": "object",
@@ -113,7 +114,8 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         "list_messages",
-        "List the person's checked emails, newest first, with our verdict and the main reason.",
+        "List the person's checked emails (emails with links or files), newest first, with our verdict and the "
+        "main reason.",
         {
             "type": "object",
             "properties": {
@@ -136,8 +138,9 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         "get_stats",
-        "Counts over a period: every email checked, the ones that looked fine, the suspicious ones (including those "
-        "moved out of the inbox, also counted separately), and the senders flagged most often.",
+        "Counts over a period of the emails with links or files we checked: all of them, the ones that looked "
+        "fine, the suspicious ones (including those moved out of the inbox, also counted separately), and the "
+        "senders flagged most often. Plain text emails are not checked and not counted.",
         {"type": "object", "properties": {"days": {"type": "integer", "minimum": 1, "maximum": MAX_DAYS},
                                           "mailbox": _MAILBOX}},
     ),

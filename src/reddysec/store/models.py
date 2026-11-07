@@ -498,6 +498,51 @@ class RecoveryCodeRow(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class InviteRow(Base):
+    """An invitation to open a Secureddy account (invite-only sign-up).
+
+    Secureddy is free and for a handful of people (``Settings.max_users``,
+    5 by default). While ``Settings.signup_mode`` is ``invite_only`` a sign-in
+    that would create a new account is accepted only for an email address with
+    an open invite (not revoked) that the identity provider verified, and only
+    while fewer than ``max_users`` accounts are active. People who already
+    have an account are never affected. ``email`` is stored lower case;
+    ``accepted_at`` is set when the account is created; an accepted invite is
+    kept as the record of who invited whom.
+    """
+
+    __tablename__ = "invites"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    invited_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MailboxDailyCounterRow(Base):
+    """Cheap per-mailbox, per-day counters for operations and debugging only.
+
+    Today one: ``skipped_text_only``, the emails the worker ignored because
+    they had nothing to click or open (``analysis.actionable``). The owner
+    asked that those emails are not counted anywhere the person sees, so this
+    number is never shown in the app; the account card only says, without a
+    number, that plain text emails are not checked. ``day`` is the UTC date
+    as ``YYYY-MM-DD``.
+    """
+
+    __tablename__ = "mailbox_daily_counters"
+    __table_args__ = (UniqueConstraint("mailbox_id", "day", name="uq_mailbox_daily_counter"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mailbox_id: Mapped[str] = mapped_column(String(40), ForeignKey("mailboxes.id"), index=True)
+    day: Mapped[str] = mapped_column(String(10))
+    skipped_text_only: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class TrustedDeviceRow(Base):
     """"Remember this device for 30 days": the browser holds a random token in
     ``rs_mfa_dev``; we keep its SHA-256. ``session_id`` is the sign-in that

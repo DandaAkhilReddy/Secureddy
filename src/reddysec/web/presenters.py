@@ -371,7 +371,9 @@ def _n(count: int, noun: str) -> str:
     return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
-# How each period reads in a sentence ("We checked 120 emails this month.").
+# How each period reads in a sentence ("We checked 120 emails with links or files
+# this month."). Only email with something to click or open is checked;
+# plain text email is not checked and not counted (analysis.actionable).
 PERIOD_PHRASES = {"today": "today", "7d": "this week", "1m": "this month", "1y": "this year"}
 PERIOD_SHORT = {"today": "today", "7d": "7 days", "1m": "1 month", "1y": "1 year"}
 
@@ -382,8 +384,8 @@ def weekly_sentence(counts: WeeklyCounts, *, has_mailboxes: bool, period: str = 
     if not has_mailboxes:
         return "Connect a mailbox and we start checking your email within a minute."
     if counts.checked == 0:
-        return f"We have not seen any new email {when}. Everything is quiet."
-    parts = [f"We checked {_n(counts.checked, 'email')} {when}."]
+        return f"We have not seen any new email with links or files {when}. Everything is quiet."
+    parts = [f"We checked {_n(counts.checked, 'email')} with links or files {when}."]
     if counts.suspicious:
         parts.append(f"{counts.suspicious} looked suspicious.")
         if counts.quarantined:
@@ -556,6 +558,15 @@ def message_tabs(current: str, *, period: str | None, mailbox: str | None) -> li
 # --------------------------------------------------------------------------
 
 ACTION_PHRASES = {
+    "invite_created": "Invited someone to Secureddy",
+    "invite_revoked": "Withdrew an invitation",
+    "user_disabled": "Turned off an account",
+    "user_enabled": "Turned an account back on",
+    "role_changed": "Changed what an account can do",
+    "admin_bootstrapped": "Became the first admin",
+    "text_scams_on": "Turned on checks of text-only emails for money scams",
+    "text_scams_off": "Turned off checks of text-only emails for money scams",
+    "hold_released_on_pause": "Released held email because protection was paused",
     "login": "Signed in",
     "logout": "Signed out",
     "mailbox_connected": "Connected a mailbox",
@@ -633,7 +644,22 @@ def detail_phrase(entry: AuditLog) -> str:
         )
     if entry.action == "mailbox_connected" and d.get("provider"):
         return provider_label(str(d["provider"]))
+    if entry.action in ("invite_created", "invite_revoked", "user_disabled", "user_enabled") and d.get("email"):
+        return str(d["email"])
+    if entry.action == "role_changed" and d.get("to"):
+        return f"{d.get('email', '')} · {ROLE_NAMES.get(str(d.get('from')), d.get('from'))} to " \
+               f"{ROLE_NAMES.get(str(d.get('to')), d.get('to'))}".strip(" ·")
     return ""
+
+
+# What each role can do, in words (the People page and its audit lines).
+ROLE_NAMES = {
+    Role.PRINCIPAL.value: "Member",
+    Role.FAMILY.value: "Family member",
+    Role.ASSISTANT.value: "Assistant",
+    Role.CONCIERGE.value: "Analyst",
+    Role.ADMIN.value: "Admin",
+}
 
 
 # --------------------------------------------------------------------------
