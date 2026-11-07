@@ -639,7 +639,7 @@ class TestImaplibSession:
         assert session.uid_search("EMPTY") == []
         assert session.uid_fetch([]) == []
         messages = session.uid_fetch([5, 6])
-        assert conn.commands[-1] == ("UID", "FETCH", "5,6", "(UID INTERNALDATE FLAGS RFC822)")
+        assert conn.commands[-1] == ("UID", "FETCH", "5,6", "(UID INTERNALDATE FLAGS BODY.PEEK[])")
         assert [m.uid for m in messages] == [5, 6]
         assert messages[0].raw == b"From: a@b\r\n\r\n"
         assert messages[0].flags == frozenset({"\\Seen", "$ReddySafe"})  # flags came after the literal

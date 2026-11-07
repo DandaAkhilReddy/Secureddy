@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, csrf, proposal_card, empty_art with context %}
+{% from "_macros.html" import icon, csrf, proposal_card, empty_art, chat_card with context %}
 {% block title %}{{ conversation.title if conversation else "Ask Secureddy" }} · Secureddy{% endblock %}
 {% block main_class %} content-chat{% endblock %}
 {% block content %}
@@ -28,7 +28,7 @@
   <section class="chat-main" aria-labelledby="chat-title">
     <header class="chat-head">
       <h1 id="chat-title">{{ conversation.title if conversation else "Ask Secureddy" }}</h1>
-      <p class="muted small">I can see your verdicts and reports, not the text of your email. I suggest; you decide.</p>
+      <p class="muted small">I can see your verdicts and reports, not the text of your email. I suggest; you decide. <span class="scope-tag">{{ icon("inbox", "ico ico-sm") }}{{ scope_label }}</span></p>
     </header>
 
     {% if not enabled %}
@@ -36,6 +36,9 @@
       {{ empty_art("chat") }}
       <h2>The assistant isn't switched on yet</h2>
       <p class="muted">Your email is still checked and labelled as usual. Once your Secureddy team turns the assistant on, you can ask it questions here.</p>
+      {% if is_admin %}
+      <p class="help admin-hint">For the administrator: set <code>RS_ASSISTANT_PROVIDER=anthropic</code> and either the keyless Claude settings (<code>RS_ANTHROPIC_FEDERATION_RULE_ID</code>, <code>RS_ANTHROPIC_ORGANIZATION_ID</code>, <code>RS_ANTHROPIC_SERVICE_ACCOUNT_ID</code>, <code>RS_ANTHROPIC_WIF_AUDIENCE</code>) or <code>RS_ANTHROPIC_API_KEY</code>. See docs/claude-keyless-setup.md.</p>
+      {% endif %}
     </div>
     {% else %}
     <ol class="chat-log" id="chat-log" aria-live="polite" aria-relevant="additions">
@@ -54,7 +57,7 @@
       {% for b in bubbles %}
       <li class="bubble bubble-{{ b.role }}{% if b.failed %} bubble-failed{% endif %}" id="{{ b.id }}">
         {% if b.role == "assistant" %}<span class="bubble-who">{{ icon("shield-check", "ico") }}Secureddy</span>{% endif %}
-        {% if b.role == "user" and b.about_label %}<span class="bubble-about">About: {{ b.about_label }}</span>{% endif %}
+        {% if b.role == "user" and b.about_label %}<span class="bubble-about">About: {{ b.about_label }}{% if b.read_email %} · you let me read it{% endif %}</span>{% endif %}
         <div class="bubble-body">
           {% if b.role == "user" %}
           <p>{{ b.text }}</p>
@@ -68,11 +71,12 @@
           {% endfor %}
           {% endif %}
         </div>
+        {% for c in b.cards or [] %}{{ chat_card(c) }}{% endfor %}
         {% for p in b.proposals or [] %}{{ proposal_card(p) }}{% endfor %}
       </li>
       {% endfor %}
     </ol>
-    <div class="typing" id="typing" hidden aria-hidden="true"><span></span><span></span><span></span><em>Secureddy is looking&hellip;</em></div>
+    <div class="typing" id="typing" hidden aria-hidden="true"><span></span><span></span><span></span><em data-status>Secureddy is looking&hellip;</em></div>
 
     {% if not bubbles %}
     <form method="post" action="/assistant/send" class="suggest-list chat-suggest" data-suggest>
@@ -93,14 +97,21 @@
       <input type="hidden" name="conversation_id" value="{{ conversation.id if conversation else '' }}">
       {% if about %}
       <input type="hidden" name="about" value="{{ about.id }}">
-      <p class="composer-about">{{ icon("mail") }}<span>About: {{ about.subject or "(no subject)" }}</span></p>
+      <div class="composer-about-row">
+        <p class="composer-about">{{ icon("mail") }}<span>About: {{ about.subject or "(no subject)" }}</span></p>
+        <label class="check read-consent" title="Sends the plain text of this one email to the assistant for your next question only. We note it in your audit log.">
+          <input type="checkbox" name="read_email" value="{{ about.id }}" data-read-consent>
+          <span>Let the assistant read this email</span>
+        </label>
+      </div>
       {% endif %}
       <label class="sr-only" for="composer-input">Your question</label>
       <div class="composer-row">
         <textarea class="input composer-input" id="composer-input" name="message" rows="1" maxlength="{{ max_chars }}" placeholder="Ask about your email…" required></textarea>
-        <button class="btn btn-primary btn-icon" type="submit" aria-label="Send">{{ icon("send") }}</button>
+        <button class="btn btn-primary btn-icon" type="submit" aria-label="Send" data-send>{{ icon("send") }}</button>
+        <button class="btn btn-quiet btn-icon" type="button" aria-label="Stop" data-stop hidden>{{ icon("stop") }}</button>
       </div>
-      <p class="help composer-help">Enter to send, Shift+Enter for a new line.</p>
+      <p class="help composer-help">Enter to send, Shift+Enter for a new line. I only answer about your own email and Secureddy.</p>
     </form>
     {% endif %}
     {% endif %}

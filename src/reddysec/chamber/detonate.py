@@ -68,6 +68,7 @@ from reddysec.models import (
     RedirectHop,
 )
 
+from . import lures
 from .common import (
     BROWSER_VIEWABLE_TYPES,
     extension_of,
@@ -75,6 +76,7 @@ from .common import (
     host_of,
     is_image_type,
     is_third_party,
+    refine_download_type,
     registrable_domain,
     safe_filename,
     sniff_type,
@@ -99,6 +101,11 @@ MAX_FRAMES_INSPECTED = 20
 MAX_PDF_PAGES_RENDERED = 20
 SCREENSHOT_QUALITY = 60
 MIN_TIMEOUT_S = 5
+MAX_LURE_CLICKS = 3
+LURE_CLICK_TIMEOUT_MS = 1500
+LURE_SETTLE_S = 0.8
+SNIFF_HEAD_BYTES = 0x9000  # enough to see an ISO 9660 volume descriptor at 0x8001
+MAX_ARCHIVE_NAMES = 50
 
 LAUNCH_ARGS: tuple[str, ...] = (
     "--disable-blink-features=AutomationControlled",
@@ -129,6 +136,119 @@ _INIT_SCRIPT = """
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', report, {once: true});
   else report();
+
+  // --- lure instrumentation (see chamber.lures) -----------------------------
+  // Record, never block: every hook calls through (or resolves) so the page
+  // behaves as it would for a person, and we learn what it tried to do.
+  const send = (kind, data) => { try { emit('__rs:' + kind + ' ' + JSON.stringify(data || {})); } catch (e) {} };
+  const clip = (text, via) => {
+    try {
+      if (text === null || text === undefined) return;
+      const t = String(text);
+      if (!t.trim()) return;
+      send('clip', {t: t.slice(0, 2000), via: via});
+    } catch (e) {}
+  };
+  try {
+    if (window.Clipboard && Clipboard.prototype) {
+      const origWrite = Clipboard.prototype.writeText;
+      Clipboard.prototype.writeText = function (text) {
+        clip(text, 'writeText');
+        try { return Promise.resolve(origWrite ? origWrite.call(this, text) : undefined).catch(() => undefined); }
+        catch (e) { return Promise.resolve(); }
+      };
+      const origWriteItems = Clipboard.prototype.write;
+      Clipboard.prototype.write = function (items) {
+        try {
+          for (const item of Array.from(items || [])) {
+            if (item && item.types && Array.from(item.types).some(t => /^text[/]/i.test(t))) {
+              const type = Array.from(item.types).find(t => /^text[/]plain/i.test(t)) || Array.from(item.types).find(t => /^text[/]/i.test(t));
+              Promise.resolve(item.getType(type)).then(b => b.text()).then(t => clip(t, 'write')).catch(() => {});
+            }
+          }
+        } catch (e) {}
+        try { return Promise.resolve(origWriteItems ? origWriteItems.call(this, items) : undefined).catch(() => undefined); }
+        catch (e) { return Promise.resolve(); }
+      };
+    }
+  } catch (e) {}
+  try {
+    const origExec = Document.prototype.execCommand;
+    Document.prototype.execCommand = function (command) {
+      try {
+        if (String(command).toLowerCase() === 'copy' || String(command).toLowerCase() === 'cut') {
+          let t = '';
+          const ae = document.activeElement;
+          if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) {
+            try { t = String(ae.value).substring(ae.selectionStart || 0, ae.selectionEnd || String(ae.value).length); } catch (e) {}
+          }
+          if (!t) { const sel = document.getSelection(); t = sel ? sel.toString() : ''; }
+          clip(t, 'execCommand');
+        }
+      } catch (e) {}
+      return origExec.apply(this, arguments);
+    };
+  } catch (e) {}
+  try {
+    const origSet = DataTransfer.prototype.setData;
+    DataTransfer.prototype.setData = function (type, data) {
+      try { if (/^text/i.test(String(type))) clip(data, 'setData'); } catch (e) {}
+      return origSet.apply(this, arguments);
+    };
+  } catch (e) {}
+  try {
+    if (window.Notification && typeof Notification.requestPermission === 'function') {
+      Notification.requestPermission = function () { send('perm', {k: 'notifications'}); return Promise.resolve('default'); };
+    }
+    if (window.PushManager && PushManager.prototype.subscribe) {
+      PushManager.prototype.subscribe = function () { send('perm', {k: 'push'}); return Promise.reject(new DOMException('denied', 'NotAllowedError')); };
+    }
+  } catch (e) {}
+  try {
+    if (!('ethereum' in window)) {
+      const reject = () => Promise.reject(Object.assign(new Error('User rejected the request.'), {code: 4001}));
+      const eth = {
+        isMetaMask: true, chainId: '0x1', networkVersion: '1', selectedAddress: null,
+        request: (args) => { send('wallet', {m: String((args && args.method) || '').slice(0, 60)}); return reject(); },
+        enable: () => { send('wallet', {m: 'enable'}); return reject(); },
+        send: (m) => { send('wallet', {m: String((m && m.method) || m || '').slice(0, 60)}); return reject(); },
+        sendAsync: (m, cb) => { send('wallet', {m: String((m && m.method) || '').slice(0, 60)}); try { cb && cb(new Error('rejected')); } catch (e) {} },
+        on: () => eth, removeListener: () => eth, isConnected: () => true,
+      };
+      Object.defineProperty(window, 'ethereum', {value: eth, configurable: true, writable: true});
+    }
+  } catch (e) {}
+  try {
+    for (const name of ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen']) {
+      const orig = Element.prototype[name];
+      if (typeof orig !== 'function') continue;
+      Element.prototype[name] = function () { send('fs', {}); try { return orig.apply(this, arguments); } catch (e) { return Promise.resolve(); } };
+    }
+    if (navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
+      const origLock = navigator.keyboard.lock.bind(navigator.keyboard);
+      navigator.keyboard.lock = function () { send('klock', {}); try { return origLock.apply(null, arguments); } catch (e) { return Promise.resolve(); } };
+    }
+  } catch (e) {}
+  try {
+    const origAdd = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type) {
+      try { if (type === 'beforeunload' && this === window) send('unload', {}); } catch (e) {}
+      return origAdd.apply(this, arguments);
+    };
+    const desc = Object.getOwnPropertyDescriptor(window, 'onbeforeunload') || Object.getOwnPropertyDescriptor(Window.prototype, 'onbeforeunload');
+    if (desc && desc.set && desc.configurable !== false) {
+      Object.defineProperty(window, 'onbeforeunload', {
+        configurable: true, enumerable: true,
+        get() { return desc.get.call(window); },
+        set(v) { if (v) send('unload', {}); desc.set.call(window, v); },
+      });
+    }
+  } catch (e) {}
+  try {
+    const origClear = console.clear;
+    let clears = 0;
+    console.clear = function () { if (clears++ < 50) send('cclear', {}); try { return origClear.apply(console, arguments); } catch (e) {} };
+  } catch (e) {}
 })();
 """
 
@@ -160,6 +280,14 @@ _FEATURES_JS = """
   });
   out.forms = forms;
   out.has_password_field = !!document.querySelector('input[type=password i]');
+  out.lure_text = bodyText.slice(0, 20000);
+  const seedRe = /seed|mnemonic|recovery ?phrase|secret ?phrase|private ?key|passphrase|word ?(?:#|no[.]?|number)? ?\\d{1,2}\\b/i;
+  out.seed_inputs = Array.from(document.querySelectorAll('input,textarea')).slice(0, 300).filter(el => {
+    const t = (el.getAttribute('type') || 'text').toLowerCase();
+    if (!['text', 'password', 'search', ''].includes(t) && el.tagName !== 'TEXTAREA') return false;
+    const label = [el.getAttribute('name'), el.getAttribute('id'), el.getAttribute('placeholder'), el.getAttribute('aria-label')].join(' ');
+    return seedRe.test(label);
+  }).length;
   if (mode === 'frame') return out;
 
   out.title = document.title || null;
@@ -211,6 +339,7 @@ _FEATURES_JS = """
   out.captcha_detected = /recaptcha|hcaptcha|turnstile|challenges\\.cloudflare\\.com|cf-challenge|arkoselabs|funcaptcha|geetest/.test(srcs + ' ' + classes) ||
       /verify (that )?you are (a )?human|are you a robot|i'?m not a robot|checking your browser|confirm you are human|complete the security check|security verification/.test(lowered);
   out.blocked_text = /access denied|enable javascript and cookies|checking your browser|unusual traffic|attention required|request blocked|bot detected|automated access|403 forbidden/.test(lowered);
+  out.captcha_srcs = Array.from(document.querySelectorAll('script[src],iframe[src]')).map(e => e.getAttribute('src') || '').filter(u => /recaptcha|hcaptcha|turnstile|challenges[.]cloudflare[.]com|arkoselabs|funcaptcha|geetest/i.test(u)).slice(0, 10);
   out.inline_scripts = Array.from(document.scripts).filter(s => !s.src).map(s => (s.textContent || '').slice(0, 20000)).slice(0, 50);
   return out;
 }
@@ -287,6 +416,15 @@ class _Collector:
     nav_responses: list[Any] = field(default_factory=list)
     download_attempts: int = 0
     dropped_requests: int = 0
+    clipboard_writes: list[str] = field(default_factory=list)
+    permission_requests: list[str] = field(default_factory=list)
+    wallet_methods: list[str] = field(default_factory=list)
+    fullscreen_requested: bool = False
+    keyboard_lock: bool = False
+    beforeunload_trap: bool = False
+    console_clears: int = 0
+    dialog_count: int = 0
+    lure_clicks: list[str] = field(default_factory=list)
     pending: set[asyncio.Task[Any]] = field(default_factory=set)
     popups: list[Any] = field(default_factory=list)
     playwright: Any = None
@@ -397,14 +535,42 @@ class _Collector:
 
     def _on_channel(self, payload: str) -> None:
         kind, _, body = payload.partition(" ")
-        if kind != "meta":
-            return
         try:
-            data = json.loads(body)
+            data = json.loads(body) if body else {}
         except json.JSONDecodeError:
             return
-        if data.get("top"):
-            self.meta_refresh_docs[str(data.get("doc"))] = data.get("target")
+        if not isinstance(data, dict):
+            return
+        if kind == "meta":
+            if data.get("top"):
+                self.meta_refresh_docs[str(data.get("doc"))] = data.get("target")
+        elif kind == "clip":
+            self.record_clipboard(str(data.get("t") or ""))
+        elif kind == "perm":
+            what = str(data.get("k") or "")[:30]
+            if what and what not in self.permission_requests:
+                self.permission_requests.append(what)
+        elif kind == "wallet":
+            method = str(data.get("m") or "")[:60]
+            if method and method not in self.wallet_methods and len(self.wallet_methods) < 20:
+                self.wallet_methods.append(method)
+        elif kind == "fs":
+            self.fullscreen_requested = True
+        elif kind == "klock":
+            self.keyboard_lock = True
+        elif kind == "unload":
+            self.beforeunload_trap = True
+        elif kind == "cclear":
+            self.console_clears += 1
+
+    def record_clipboard(self, text: str) -> None:
+        text = text[: lures.CLIPBOARD_MAX_CHARS]
+        if not text.strip() or text in self.clipboard_writes or len(self.clipboard_writes) >= lures.MAX_CLIPBOARD_WRITES:
+            return
+        self.clipboard_writes.append(text)
+
+    def on_dialog(self, dialog: Any) -> None:
+        self.dialog_count += 1
 
     def on_page_error(self, error: Any) -> None:
         self.console_error(f"pageerror: {getattr(error, 'message', error)}")
@@ -499,6 +665,8 @@ async def _run(col: _Collector) -> None:
     await _settle(col)
     if profile.interact and col.remaining() > 2.5:
         await _interact(col)
+    if profile.click_lures and col.remaining() > 3.0:
+        await _click_lures(col)
     await _drain_pending(col)
     await _extract_features(col)
     await _screenshot(col)
@@ -513,7 +681,7 @@ def _wire_page(col: _Collector, page: Any, *, popup: bool) -> None:
     page.on("pageerror", col.on_page_error)
     page.on("download", lambda download: _track(col, _save_download(col, download)))
     # alert()/confirm()/prompt() would otherwise block the page forever.
-    page.on("dialog", lambda dialog: _track(col, dialog.dismiss()))
+    page.on("dialog", lambda dialog: (col.on_dialog(dialog), _track(col, dialog.dismiss())))
     if popup:
         col.popups.append(page)
         col.note(f"popup opened: {page.url[:300]}")
@@ -589,6 +757,88 @@ async def _interact(col: _Collector) -> None:
         col.note(f"interaction skipped: {str(exc).splitlines()[0][:200]}")
 
 
+# Finds the next lure to click: "I'm not a robot" checkboxes, "Verify",
+# "Fix it", "Connect wallet". Candidates inside a form with a password field
+# are skipped (we never submit credentials forms), as are links that leave
+# for another site. The chosen element is tagged with a data attribute so
+# Playwright can scroll to it and click it with a real (trusted) mouse event.
+_LURE_FINDER_JS = """
+(clicked) => {
+  const done = new Set(clicked || []);
+  const textRe = /^(?:[\\u2610\\u2611\\u2713\\u2714\\u25a1\\s]*)(?:i'?m not a robot|i am not a robot|i'?m (?:a )?human|i am (?:a )?human|not a robot|verify(?: (?:you are|you're|i am|that you are) (?:a )?human)?|verify (?:now|me|identity)|click (?:here )?to verify|verification|human verification|confirm (?:you are|you're|i'?m) (?:a )?human|press (?:&|and) hold|fix it|fix(?: (?:it|error|issue|now))?|how to fix|show (?:the )?solution|solution|repair|open file explorer|connect (?:your )?wallet|claim(?: (?:now|airdrop|reward|rewards|tokens?|nft))?)[\\s.!]*$/i;
+  const hintRe = /captcha|recaptcha|checkbox|check-box|verify|robot|human|turnstile|challenge/i;
+  const rank = (t) => /robot|human|hold/i.test(t) ? 0 : /verif/i.test(t) ? 1 : /fix|solution|repair/i.test(t) ? 2 : 3;
+  const els = Array.from(document.querySelectorAll('button,a,input[type=checkbox],input[type=button],input[type=submit],[role=button],[role=checkbox],label,div,span')).slice(0, 4000);
+  const found = [];
+  for (const el of els) {
+    if (el.closest('form') && el.closest('form').querySelector('input[type=password i]')) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4) continue;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) === 0) continue;
+    let text = ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim().replace(/\\s+/g, ' ');
+    const hint = (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : '');
+    const tag = el.tagName;
+    const clickable = /^(BUTTON|A|INPUT|LABEL)$/.test(tag) || /^(button|checkbox)$/.test(el.getAttribute('role') || '') || el.hasAttribute('onclick') || cs.cursor === 'pointer';
+    if (!clickable) continue;
+    let ok = text.length > 0 && text.length <= 60 && textRe.test(text);
+    if (!ok && text.length <= 60 && hintRe.test(hint) && (tag === 'INPUT' || rect.width <= 120)) { ok = true; text = text || hint.trim().slice(0, 40); }
+    if (!ok) continue;
+    if (tag === 'A') {
+      const href = el.getAttribute('href') || '';
+      try { const u = new URL(href, location.href); if (u.hostname && u.hostname !== location.hostname && !href.startsWith('#') && !href.startsWith('javascript:')) continue; } catch (e) {}
+    }
+    const key = text.toLowerCase().slice(0, 60) || hint.slice(0, 60);
+    if (done.has(key)) continue;
+    // Prefer the innermost element carrying the text.
+    if (found.some(f => el.contains(f.el))) continue;
+    for (let i = found.length - 1; i >= 0; i--) if (found[i].el.contains(el)) found.splice(i, 1);
+    found.push({el, key, rank: rank(text)});
+  }
+  if (!found.length) return null;
+  found.sort((a, b) => a.rank - b.rank);
+  for (const old of document.querySelectorAll('[data-rs-lure]')) old.removeAttribute('data-rs-lure');
+  found[0].el.setAttribute('data-rs-lure', '1');
+  return found[0].key;
+}
+"""
+
+
+async def _click_lures(col: _Collector) -> None:
+    """Click up to ``MAX_LURE_CLICKS`` obvious lure elements so a fake CAPTCHA
+    or fake error reveals what it puts on the clipboard and what it tells
+    the reader to do. Bounded by short timeouts; never raises."""
+    clicked: list[str] = []
+    for _ in range(MAX_LURE_CLICKS):
+        if col.remaining() < 2.5 or col.page is None:
+            break
+        target = None
+        key = None
+        frames = [col.page.main_frame] + [f for f in col.page.frames if f != col.page.main_frame][:5]
+        for frame in frames:
+            try:
+                key = await asyncio.wait_for(frame.evaluate(_LURE_FINDER_JS, clicked), timeout=2.0)
+            except Exception:
+                key = None
+            if key:
+                target = frame
+                break
+        if not target or not key:
+            break
+        clicked.append(str(key))
+        try:
+            await target.locator('[data-rs-lure="1"]').first.click(timeout=col.remaining_ms(LURE_CLICK_TIMEOUT_MS), no_wait_after=True)
+            col.lure_clicks.append(str(key)[:60])
+        except Exception as exc:
+            col.note(f"lure click skipped: {str(exc).splitlines()[0][:160]}")
+            continue
+        await asyncio.sleep(min(LURE_SETTLE_S, max(0.1, col.remaining() - 2.0)))
+        try:
+            await col.page.wait_for_load_state("domcontentloaded", timeout=col.remaining_ms(1500))
+        except Exception:
+            pass
+
+
 async def _drain_pending(col: _Collector) -> None:
     """Let in-flight downloads finish within what is left of the budget."""
     if not col.pending:
@@ -620,22 +870,39 @@ async def _save_download(col: _Collector, download: Any) -> None:
     size = path.stat().st_size
     digest = hashlib.sha256()
     with path.open("rb") as fh:
-        head = fh.read(4096)
+        head = fh.read(SNIFF_HEAD_BYTES)
         digest.update(head)
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
+    sniffed = refine_download_type(head, suggested, sniff_type(head))
     record = DownloadRecord(
         suggested_filename=suggested,
         sha256=digest.hexdigest(),
         size=size,
-        sniffed_type=sniff_type(head),
+        sniffed_type=sniffed,
         stored_ref=f"file:{name}",
     )
+    if sniffed == "zip" and size <= MAX_DOWNLOAD_BYTES:
+        record.archive_entries, record.encrypted = _zip_listing(path)
     if size > MAX_DOWNLOAD_BYTES:
         path.unlink(missing_ok=True)
         record.stored_ref = None
         col.note(f"download {suggested} ({size} bytes) exceeds {MAX_DOWNLOAD_BYTES} bytes; hash recorded, bytes dropped")
     col.downloads.append(record)
+
+
+def _zip_listing(path: Path) -> tuple[list[str], bool]:
+    """Entry names and "password-protected?" for a downloaded ZIP. Reads the
+    central directory only; nothing is extracted."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as z:
+            infos = z.infolist()[:1000]
+    except Exception:
+        return [], False
+    names = [i.filename[:200] for i in infos if not i.is_dir()][:MAX_ARCHIVE_NAMES]
+    return names, any(i.flag_bits & 0x1 for i in infos)
 
 
 async def _quiet(coro: Any) -> Any:
@@ -669,9 +936,13 @@ async def _extract_features(col: _Collector) -> None:
 
     forms = [_form_record(f) for f in raw.get("forms") or [] if isinstance(f, dict)]
     has_password = bool(raw.get("has_password_field"))
-    frame_forms, frame_password = await _inspect_frames(col)
+    frame_forms, frame_password, frame_text, frame_seed = await _inspect_frames(col)
     forms.extend(frame_forms)
     has_password = has_password or frame_password
+    lure_text = str(raw.get("lure_text") or "")
+    if frame_text:
+        lure_text = (lure_text + "\n" + frame_text)[:40000]
+    found = lures.analyse_page(lure_text, col.clipboard_writes)
 
     status_code = col.main_response.status if col.main_response is not None else None
     if col.job.kind is DetonationKind.FILE:
@@ -698,7 +969,51 @@ async def _extract_features(col: _Collector) -> None:
         captcha_detected=bool(raw.get("captcha_detected")),
         automation_blocked_hint=blocked,
         status_code=status_code,
+        clipboard_writes=list(col.clipboard_writes),
+        clickfix_instructions=found.clickfix_instructions,
+        fake_captcha=found.fake_captcha,
+        run_dialog_lure=found.run_dialog_lure,
+        instruction_hits=found.hits,
+        instruction_excerpt=found.excerpt,
+        lure_clicks=list(col.lure_clicks),
+        captcha_providers=_captcha_providers(col, raw.get("captcha_srcs") or []),
+        notification_permission_requested=bool(col.permission_requests),
+        wallet_requests=list(col.wallet_methods),
+        seed_phrase_inputs=int(raw.get("seed_inputs") or 0) + frame_seed,
+        fullscreen_requested=col.fullscreen_requested,
+        keyboard_lock=col.keyboard_lock,
+        dialog_count=col.dialog_count,
+        beforeunload_trap=col.beforeunload_trap,
+        console_clear_count=col.console_clears,
+        anti_debug=lures.anti_debug_script(scripts) or col.console_clears >= 5,
+        ua_cloaking=lures.ua_cloaking_script(scripts),
+        phone_numbers=lures.phone_numbers(lure_text) if lures.tech_support_hits(lure_text) else [],
     )
+
+
+_CAPTCHA_HOSTS: tuple[tuple[str, str], ...] = (
+    ("challenges.cloudflare.com", "turnstile"),
+    ("hcaptcha.com", "hcaptcha"),
+    ("recaptcha.net", "recaptcha"),
+    ("www.google.com/recaptcha", "recaptcha"),
+    ("gstatic.com/recaptcha", "recaptcha"),
+    ("arkoselabs.com", "arkose"),
+    ("funcaptcha.com", "arkose"),
+    ("geetest.com", "geetest"),
+)
+
+
+def _captcha_providers(col: _Collector, srcs: list[Any]) -> list[str]:
+    """Real CAPTCHA services the page loaded (from requests and script/iframe
+    sources). A page that *looks* like a CAPTCHA but loads none is suspect."""
+    found: list[str] = []
+    urls = [str(u) for u in srcs][:20] + [r.url for r in col.requests[:MAX_REQUESTS]]
+    for url in urls:
+        low = url.lower()
+        for marker, name in _CAPTCHA_HOSTS:
+            if marker in low and name not in found:
+                found.append(name)
+    return found
 
 
 def _form_record(raw: dict[str, Any]) -> FormRecord:
@@ -711,11 +1026,14 @@ def _form_record(raw: dict[str, Any]) -> FormRecord:
     )
 
 
-async def _inspect_frames(col: _Collector) -> tuple[list[FormRecord], bool]:
-    """Forms and password fields inside child frames (Playwright can evaluate
-    in cross-origin frames, which is exactly where login iframes live)."""
+async def _inspect_frames(col: _Collector) -> tuple[list[FormRecord], bool, str, int]:
+    """Forms, password fields, lure text and seed-phrase inputs inside child
+    frames (Playwright can evaluate in cross-origin frames, which is exactly
+    where login iframes and fake CAPTCHA widgets live)."""
     forms: list[FormRecord] = []
     has_password = False
+    texts: list[str] = []
+    seed = 0
     frames = [f for f in col.page.frames if f != col.page.main_frame][:MAX_FRAMES_INSPECTED]
     for frame in frames:
         if col.remaining() < 1.0:
@@ -728,7 +1046,11 @@ async def _inspect_frames(col: _Collector) -> tuple[list[FormRecord], bool]:
             continue
         forms.extend(_form_record(f) for f in raw.get("forms") or [] if isinstance(f, dict))
         has_password = has_password or bool(raw.get("has_password_field"))
-    return forms, has_password
+        text = str(raw.get("lure_text") or "")[:5000]
+        if text.strip():
+            texts.append(text)
+        seed += int(raw.get("seed_inputs") or 0)
+    return forms, has_password, "\n".join(texts)[:20000], seed
 
 
 # --- screenshot + QR ----------------------------------------------------------

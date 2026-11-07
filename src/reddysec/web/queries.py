@@ -619,75 +619,168 @@ async def disconnect_mailbox(session: AsyncSession, user: UserRow, mailbox: Mail
 
 @dataclass(frozen=True)
 class WeeklyCounts:
-    checked: int = 0  # every email with a verdict
+    """The numbers for one period on Home (the name predates the period filter).
+
+    ``checked`` is every email with a verdict ("Emails checked"); ``safe`` is
+    the Checked card (looked fine, still in the inbox); ``suspicious`` is every
+    flagged email, including the ones we moved out of the inbox; ``quarantined``
+    is how many of those were moved."""
+
+    checked: int = 0
     suspicious: int = 0
     quarantined: int = 0
-    safe: int = 0  # the "Checked" card: verdict safe
+    safe: int = 0
 
 
-async def weekly_counts(session: AsyncSession, user: UserRow, *, now: datetime | None = None) -> WeeklyCounts:
-    since = (now or utcnow()) - timedelta(days=7)
-    stmt = (
-        select(
-            func.count(MessageRow.id),
-            func.coalesce(func.sum(case((MessageRow.level == "suspicious", 1), else_=0)), 0),
-            func.coalesce(func.sum(case((MessageRow.quarantined.is_(True), 1), else_=0)), 0),
-            func.coalesce(func.sum(case((MessageRow.level == "safe", 1), else_=0)), 0),
-        )
-        .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
-        .where(
-            MailboxRow.user_id.in_(visible_owner_ids(user)),
-            MessageRow.received_at >= since,
-            MessageRow.level.is_not(None),
-        )
-    )
-    checked, suspicious, quarantined, safe = (await session.execute(stmt)).one()
-    return WeeklyCounts(int(checked), int(suspicious), int(quarantined), int(safe))
+def flagged_clause() -> Any:
+    """Suspicious, dangerous, or moved out of the inbox: the Suspicious tab."""
+    return or_(MessageRow.level.in_(("suspicious", "malicious")), MessageRow.quarantined.is_(True))
+
+
+def checked_clause() -> Any:
+    """Looked fine and still in the inbox: the Checked tab."""
+    return (MessageRow.level == "safe") & MessageRow.quarantined.is_not(True)
+
+
+# ---------------------------------------------------------------- periods
+
+PERIODS: tuple[tuple[str, str], ...] = (("today", "Today"), ("7d", "7 days"), ("1m", "1 month"), ("1y", "1 year"))
+PERIOD_KEYS = tuple(k for k, _ in PERIODS)
+DEFAULT_PERIOD = "7d"
+# Older links used ?days=1|7|30.
+DAYS_TO_PERIOD = {1: "today", 7: "7d", 30: "1m", 365: "1y"}
+
+
+@dataclass(frozen=True)
+class Period:
+    """A window ending now, in the person's time zone, and its chart buckets
+    (an hour each for Today, a day for 7 days and 1 month, a month for 1 year)."""
+
+    key: str
+    label: str
+    since: datetime  # UTC, the start of the first bucket
+    buckets: tuple[datetime, ...]  # local bucket starts, oldest first
+    unit: str  # hour | day | month
+
+
+def _month_start(value: datetime, back: int = 0) -> datetime:
+    index = value.year * 12 + (value.month - 1) - back
+    return value.replace(year=index // 12, month=index % 12 + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def period_window(key: str, *, now: datetime | None = None, tz: Any = UTC) -> Period:
+    key = key if key in PERIOD_KEYS else DEFAULT_PERIOD
+    local = (now or utcnow()).astimezone(tz)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    if key == "today":
+        hour = local.replace(minute=0, second=0, microsecond=0)
+        buckets = []
+        at = midnight
+        while at <= hour:
+            buckets.append(at)
+            # Step in UTC so a daylight-saving change neither repeats nor skips an hour.
+            at = (at.astimezone(UTC) + timedelta(hours=1)).astimezone(tz)
+        unit = "hour"
+    elif key == "1y":
+        buckets = [_month_start(local, back) for back in range(11, -1, -1)]
+        unit = "month"
+    else:
+        days = 7 if key == "7d" else 30
+        buckets = [midnight - timedelta(days=back) for back in range(days - 1, -1, -1)]
+        unit = "day"
+    return Period(key, dict(PERIODS)[key], buckets[0].astimezone(UTC), tuple(buckets), unit)
+
+
+def _bucket_key(value: datetime, unit: str) -> tuple[int, ...]:
+    if unit == "hour":
+        return (value.year, value.month, value.day, value.hour)
+    if unit == "day":
+        return (value.year, value.month, value.day)
+    return (value.year, value.month)
 
 
 @dataclass(frozen=True)
 class DailyCounts:
-    """Per-day counts for the dashboard sparklines, oldest day first."""
+    """Per-bucket counts for the dashboard sparklines, oldest first. The name
+    predates hourly and monthly buckets; ``unit`` says which."""
 
     days: tuple[datetime, ...]
     safe: tuple[int, ...]
     suspicious: tuple[int, ...]
     quarantined: tuple[int, ...]
+    unit: str = "day"
 
 
-async def daily_counts(
-    session: AsyncSession, user: UserRow, *, days: int = 7, now: datetime | None = None
-) -> DailyCounts:
-    """The last ``days`` calendar days (UTC, today included), counted the way
-    :func:`weekly_counts` counts. The rows are few (a private inbox), so they
-    are bucketed in Python, which keeps the SQL portable."""
-    now = now or utcnow()
-    today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    starts = [today - timedelta(days=days - 1 - i) for i in range(days)]
+async def period_stats(
+    session: AsyncSession, user: UserRow, period: Period, *, mailbox_id: str | None = None
+) -> tuple[WeeklyCounts, DailyCounts]:
+    """The numbers and the sparkline series for one period, from one query.
+    A private inbox has few rows, so they are bucketed in Python, which keeps
+    the SQL portable and the buckets in the person's time zone."""
     rows = (
         await session.execute(
             select(MessageRow.received_at, MessageRow.level, MessageRow.quarantined)
             .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
             .where(
                 MailboxRow.user_id.in_(visible_owner_ids(user)),
-                MessageRow.received_at >= starts[0],
+                MessageRow.received_at >= period.since,
                 MessageRow.level.is_not(None),
+                *([MessageRow.mailbox_id == mailbox_id] if mailbox_id else []),
             )
         )
     ).all()
-    safe, suspicious, quarantined = [0] * days, [0] * days, [0] * days
+    tz = period.buckets[0].tzinfo or UTC
+    index = {_bucket_key(b, period.unit): i for i, b in enumerate(period.buckets)}
+    n = len(period.buckets)
+    safe, flagged, moved = [0] * n, [0] * n, [0] * n
+    total = 0
     for received_at, level, is_quarantined in rows:
         at = received_at if received_at.tzinfo else received_at.replace(tzinfo=UTC)
-        index = (at.astimezone(UTC) - starts[0]).days
-        if not 0 <= index < days:
+        i = index.get(_bucket_key(at.astimezone(tz), period.unit))
+        if i is None:
             continue
-        if level == "safe":
-            safe[index] += 1
-        elif level == "suspicious":
-            suspicious[index] += 1
+        total += 1
         if is_quarantined:
-            quarantined[index] += 1
-    return DailyCounts(tuple(starts), tuple(safe), tuple(suspicious), tuple(quarantined))
+            moved[i] += 1
+        if is_quarantined or level in ("suspicious", "malicious"):
+            flagged[i] += 1
+        elif level == "safe":
+            safe[i] += 1
+    counts = WeeklyCounts(total, sum(flagged), sum(moved), sum(safe))
+    return counts, DailyCounts(period.buckets, tuple(safe), tuple(flagged), tuple(moved), period.unit)
+
+
+@dataclass(frozen=True)
+class MailboxWeek:
+    """One account card's numbers for the chosen period."""
+
+    checked: int = 0
+    flagged: int = 0  # suspicious, dangerous or moved out of the inbox
+
+
+async def mailbox_week_counts(
+    session: AsyncSession, user: UserRow, *, now: datetime | None = None, since: datetime | None = None
+) -> dict[str, MailboxWeek]:
+    since = since or (now or utcnow()) - timedelta(days=7)
+    rows = (
+        await session.execute(
+            select(
+                MessageRow.mailbox_id,
+                func.count(MessageRow.id),
+                func.coalesce(func.sum(case((flagged_clause(), 1), else_=0)), 0),
+            )
+            .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
+            .where(
+                MailboxRow.user_id.in_(visible_owner_ids(user)),
+                MessageRow.received_at >= since,
+                MessageRow.level.is_not(None),
+            )
+            .group_by(MessageRow.mailbox_id)
+        )
+    ).all()
+    return {mailbox_id: MailboxWeek(int(total), int(bad)) for mailbox_id, total, bad in rows}
+
+
 
 
 def _message_filters(
@@ -697,10 +790,15 @@ def _message_filters(
     level: str | None,
     quarantined: bool | None,
     since: datetime | None,
+    verdict: str | None = None,
 ) -> list[Any]:
     where: list[Any] = [MailboxRow.user_id.in_(visible_owner_ids(user))]
     if mailbox_id:
         where.append(MessageRow.mailbox_id == mailbox_id)
+    if verdict == "checked":
+        where.append(checked_clause())
+    elif verdict == "suspicious":
+        where.append(flagged_clause())
     if level:
         where.append(MessageRow.level == level)
     if quarantined is not None:
@@ -720,11 +818,14 @@ async def list_messages(
     level: str | None = None,
     quarantined: bool | None = None,
     since: datetime | None = None,
+    verdict: str | None = None,
 ) -> list[tuple[MessageRow, MailboxRow]]:
     stmt = (
         select(MessageRow, MailboxRow)
         .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
-        .where(*_message_filters(user, mailbox_id=mailbox_id, level=level, quarantined=quarantined, since=since))
+        .where(*_message_filters(
+            user, mailbox_id=mailbox_id, level=level, quarantined=quarantined, since=since, verdict=verdict
+        ))
         .order_by(MessageRow.received_at.desc(), MessageRow.id)
         .offset(max(0, offset))
         .limit(limit)
@@ -740,11 +841,14 @@ async def count_messages(
     level: str | None = None,
     quarantined: bool | None = None,
     since: datetime | None = None,
+    verdict: str | None = None,
 ) -> int:
     stmt = (
         select(func.count(MessageRow.id))
         .join(MailboxRow, MailboxRow.id == MessageRow.mailbox_id)
-        .where(*_message_filters(user, mailbox_id=mailbox_id, level=level, quarantined=quarantined, since=since))
+        .where(*_message_filters(
+            user, mailbox_id=mailbox_id, level=level, quarantined=quarantined, since=since, verdict=verdict
+        ))
     )
     return int((await session.execute(stmt)).scalar_one())
 
@@ -1144,6 +1248,43 @@ async def request_rescore(session: AsyncSession, user: UserRow, message: Message
         details={"level": message.level},
     )
     return True
+
+
+async def queue_unchecked_message(
+    session: AsyncSession, user: UserRow, mailbox: MailboxRow, hit: dict[str, Any]
+) -> MessageRow:
+    """"Check now" for a search result we have never seen: a metadata row in
+    ``rescore_requested`` so the worker fetches, analyses and labels it like a
+    re-check. ``hit`` is the signed search result (see web.search)."""
+    pid = str(hit.get("p") or "")
+    existing = (
+        await session.execute(
+            select(MessageRow).where(MessageRow.mailbox_id == mailbox.id, MessageRow.provider_message_id == pid)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.state not in PENDING_REQUEST_STATES | IN_FLIGHT_STATES:
+            await request_rescore(session, user, existing, mailbox)
+        return existing
+    try:
+        received = datetime.fromisoformat(str(hit.get("r"))) if hit.get("r") else utcnow()
+    except ValueError:
+        received = utcnow()
+    row = MessageRow(
+        id=new_id("msg"),
+        mailbox_id=mailbox.id,
+        provider_message_id=pid,
+        from_address=str(hit.get("f") or "")[:320],
+        from_name=(str(hit.get("n") or "")[:300] or None),
+        subject=str(hit.get("s") or "")[:1000],
+        received_at=received,
+        state=STATE_RESCORE_REQUESTED,
+        created_at=utcnow(),
+    )
+    session.add(row)
+    await session.flush()
+    audit(session, actor=user, action="check_now", mailbox_id=mailbox.id, target=row.id)
+    return row
 
 
 async def request_recheck_recent(

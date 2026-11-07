@@ -34,7 +34,8 @@ def test_hero():
     assert p.hero(WeeklyCounts(), has_mailboxes=False).tone == "grey"
     assert p.hero(WeeklyCounts(checked=4, safe=4), has_mailboxes=True) == p.Hero("Your inbox is safe", "ok")
     assert p.hero(WeeklyCounts(checked=3, suspicious=1), has_mailboxes=True) == p.Hero("1 email needs a look", "warn")
-    assert p.hero(WeeklyCounts(checked=3, suspicious=1, quarantined=1), has_mailboxes=True) == p.Hero(
+    # Suspicious already includes the email moved out of the inbox.
+    assert p.hero(WeeklyCounts(checked=3, suspicious=2, quarantined=1), has_mailboxes=True) == p.Hero(
         "2 emails need a look", "bad")
 
 
@@ -44,9 +45,14 @@ def test_sparkline_and_stat_cards():
     assert len(s.points.split()) == 7 and s.area.startswith("M") and s.area.endswith("Z")
     assert s.label.startswith("Last 7 days: ") and "4" in s.label
     flat = p.sparkline([])
-    assert flat.label == "Last 1 days: 0"
+    assert flat.label == "Last 1 days: 0" and len(flat.points.split()) == 2  # one bucket draws a flat line
+    hours = tuple(NOW.replace(hour=h, minute=0) for h in range(3))
+    assert p.sparkline((1, 0, 2), hours, unit="hour").label == "Today, by hour: 00:00 1, 01:00 0, 02:00 2"
+    months = (NOW.replace(month=10, day=1), NOW.replace(day=1))
+    assert p.sparkline((4, 5), months, unit="month").label == "Last 2 months: Oct 4, Nov 5"
     daily = DailyCounts(days, (1,) * 7, (0,) * 7, (0,) * 7)
     cards = p.stat_cards(WeeklyCounts(checked=7, safe=7), daily)
+    assert [c.label for c in cards] == ["Checked", "Suspicious"]
     assert all(c.spark is not None for c in cards)
     assert all(c.spark is None for c in p.stat_cards(WeeklyCounts()))
 

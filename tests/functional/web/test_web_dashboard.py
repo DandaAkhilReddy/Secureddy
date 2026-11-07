@@ -28,14 +28,17 @@ async def test_dashboard_with_messages_counts_and_rows(client, seed, login):
 
     page = client.get("/")
     assert page.status_code == 200
-    assert (
-        "We checked 3 emails this week. 1 was dangerous and is in Quarantine. 1 looked suspicious, so we marked it for care."
-        in page.text
-    )
+    assert "We checked 3 emails this week. 2 looked suspicious. We moved 1 out of your inbox." in page.text
+    cards = page.text.split('class="stats stats-2"')[1].split("</ul>")[0]
+    assert cards.count('class="stat stat-link') == 2 and "In Quarantine" not in page.text
+    assert "1 moved out of your inbox" in cards and 'class="stat-value">2<' in cards
+    assert "Moved out of inbox" in page.text  # the quarantined row keeps its chip
     assert "Setting up" in page.text  # labels == {} means the worker has not run setup yet
     for subject in ("Dinner on Friday", "Your invoice", "Reset your password now", "Still arriving"):
         assert subject in page.text
-    assert "Old news" not in page.text or "9 days" not in page.text  # listed in recent, not counted
+    assert "Old news" not in page.text  # outside the period: neither counted nor listed
+    year = client.get("/?period=1y").text
+    assert "Old news" in year and "We checked 4 emails this year." in year
     assert page.text.count('class="chip tone-bad"') >= 1
     assert "Checking" in page.text
     recent = page.text.split('id="recent-title"')[1]
@@ -83,12 +86,19 @@ async def test_message_list_filters(client, seed, login):
     everything = client.get("/messages")
     assert everything.status_code == 200
     assert all(s in everything.text for s in ("Safe one", "Bad one", "Yahoo odd one"))
-    only_bad = client.get("/messages?level=malicious")
-    assert "Bad one" in only_bad.text and "Safe one" not in only_bad.text
+    old_link = client.get("/messages?level=malicious")
+    assert old_link.status_code == 303 and old_link.headers["location"] == "/messages?tab=suspicious"
+    only_bad = client.get("/messages?tab=suspicious")
+    assert "Bad one" in only_bad.text and "Yahoo odd one" in only_bad.text and "Safe one" not in only_bad.text
+    assert "Moved out of inbox" in only_bad.text and "Not fake?" in only_bad.text
     only_yahoo = client.get(f"/messages?mailbox={yahoo.id}")
     assert "Yahoo odd one" in only_yahoo.text and "Safe one" not in only_yahoo.text
-    quarantine = client.get("/messages?quarantined=1")
-    assert "Bad one" in quarantine.text and "Yahoo odd one" not in quarantine.text
+    # The inbox picked in the switch is remembered until the person picks another.
+    still_yahoo = client.get("/messages")
+    assert "Yahoo odd one" in still_yahoo.text and "Safe one" not in still_yahoo.text
+    client.get("/messages?mailbox=all")
+    quarantine = client.get("/messages?quarantined=1&days=30", follow_redirects=True)
+    assert "Bad one" in quarantine.text and str(quarantine.url).endswith("/messages?tab=suspicious&period=1m")
     ignored = client.get("/messages?level=bogus&mailbox=mbx_not_mine")
     assert ignored.status_code == 200 and "Safe one" in ignored.text
 

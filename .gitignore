@@ -11,3 +11,12 @@ htmlcov/
 coverage.xml
 .DS_Store
 .coverage
+# secrets and local state never belong in git
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+*.key
+secrets/
+gitleaks-report.json

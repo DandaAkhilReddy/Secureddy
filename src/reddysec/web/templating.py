@@ -23,12 +23,13 @@ from reddysec.models.accounts import MAILBOX_RETRYING_ERRORS
 from . import presenters
 from .queries import is_staff
 from .security import csrf_token, pop_flashes
+from .sessions import auth_of
 
 NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("/", "Home"),
     ("/messages", "Email"),
     ("/assistant", "Ask Secureddy"),
-    ("/mailboxes", "Mailboxes"),
+    ("/mailboxes", "Accounts"),
     ("/audit", "Audit"),
 )
 STAFF_NAV_ITEMS: tuple[tuple[str, str], ...] = (("/concierge", "Concierge"),)
@@ -44,15 +45,34 @@ TAB_ITEMS: tuple[tuple[str, str, str], ...] = (
     ("/", "Home", "home"),
     ("/messages", "Email", "mail"),
     ("/assistant", "Ask", "chat"),
-    ("/mailboxes", "Mailboxes", "inbox"),
+    ("/mailboxes", "Accounts", "inbox"),
 )
 THEME_COOKIE = "rs_theme"
 THEMES = ("system", "dark", "light")
+THEME_COOKIE_MAX_AGE = 365 * 24 * 3600
 
 
 def theme_of(request: Request) -> str:
+    """Light, dark or system for ``<html data-theme>``, decided on the server
+    so the first paint is already right (no flash). The signed-in person's
+    saved choice (``user_preferences``, loaded by ``current_user``) wins; the
+    ``rs_theme`` cookie covers pages without one (sign-in, the lock screen)
+    and the moment before the first signed-in page."""
+    saved = getattr(request.state, "theme", "")
+    if saved in THEMES:
+        return str(saved)
     value = request.cookies.get(THEME_COOKIE, "system")
     return value if value in THEMES else "system"
+
+
+def remember_theme(request: Request, theme: str) -> None:
+    """Use ``theme`` for this response and keep the device cookie in step
+    (written by ``sessions.AuthSessionMiddleware``)."""
+    if theme not in THEMES:
+        return
+    request.state.theme = theme
+    if request.cookies.get(THEME_COOKIE) != theme:
+        request.scope["theme_cookie"] = theme
 
 
 def package_path(name: str) -> Path:
@@ -101,6 +121,7 @@ def _context_processor(request: Request) -> dict[str, Any]:
         "theme": theme_of(request),
         "asset_version": asset_version(),
         "dev_login_enabled": bool(getattr(state, "dev_login_enabled", False)),
+        "lock_enabled": bool(getattr(auth_of(request), "lock_enabled", False)),
         "app_version": __version__,
     }
 
@@ -120,10 +141,14 @@ def build_templates() -> Jinja2Templates:
     env.filters["provider"] = presenters.provider_label
     env.filters["lane"] = presenters.lane_short
     env.filters["action_phrase"] = presenters.action_phrase
+    env.filters["device_icon"] = lambda name: "phone" if any(
+        k in (name or "") for k in ("iPhone", "Android", "iPad")) else "laptop"
     env.globals["SAFE_REASONS"] = presenters.SAFE_REASON_CHOICES
     env.globals["FAKE_REASONS"] = presenters.FAKE_REASON_CHOICES
     env.globals["NOT_FAKE_REASONS"] = presenters.NOT_FAKE_REASON_CHOICES
     env.globals["NAV_ICONS"] = NAV_ICONS
+    env.globals["presenters_chip"] = presenters.verdict_chip
+    env.globals["moved_chip"] = presenters.moved_chip
     env.globals["RETRYING_ERRORS"] = MAILBOX_RETRYING_ERRORS
     env.globals["PROVIDER_LOGOS"] = {
         "gmail": "google", "microsoft": "microsoft", "outlook": "microsoft", "yahoo": "yahoo",
@@ -132,10 +157,15 @@ def build_templates() -> Jinja2Templates:
 
 
 def render(
-    request: Request, name: str, context: dict[str, Any] | None = None, *, status_code: int = 200
+    request: Request,
+    name: str,
+    context: dict[str, Any] | None = None,
+    *,
+    status_code: int = 200,
+    headers: dict[str, str] | None = None,
 ) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
-    return templates.TemplateResponse(request, name, context or {}, status_code=status_code)
+    return templates.TemplateResponse(request, name, context or {}, status_code=status_code, headers=headers)
 
 
 def wants_json(request: Request) -> bool:

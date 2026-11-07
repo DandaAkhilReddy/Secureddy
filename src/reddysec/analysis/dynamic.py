@@ -22,9 +22,19 @@ from reddysec.models import (
 )
 
 from .attachments import DANGEROUS_EXTENSIONS, EXECUTABLE_SNIFFED, _ext_parts
+from .click_advice import describe_download
 from .common import make_signal
 from .domains import brand_for_domain, brands_mentioned, legit_domains_for, lookalike_analysis
 from .intel import IntelClient, is_brand_shortener, is_popular, is_tracking_domain
+from .lures import (
+    clickfix_signals,
+    free_hosting_signals,
+    kit_signals,
+    link_text_signals,
+    oauth_consent_signals,
+    redirect_signals,
+    scam_page_signals,
+)
 from .trust import SenderTrust, display_mismatch_assessment, shown_domain, skip_opaque_token
 from .urls import registrable_domain
 
@@ -213,6 +223,10 @@ async def url_static_signals(
                 f"Link to {host} is not encrypted (http instead of https)", **ev,
             )
         )
+    signals.extend(redirect_signals(url))
+    signals.extend(free_hosting_signals(url))
+    signals.extend(oauth_consent_signals(url))
+    signals.extend(link_text_signals(url))
     if history is not None and history.replied_to and rd and "@" in history.address:
         if registrable_domain(history.address.rsplit("@", 1)[-1]) == rd:
             signals.append(
@@ -228,6 +242,8 @@ async def url_static_signals(
 
 
 def _download_is_dangerous(download: DownloadRecord) -> bool:
+    if describe_download(download).dangerous:
+        return True
     parts = _ext_parts(download.suggested_filename)
     ext = parts[-1] if parts else ""
     sniffed = (download.sniffed_type or "").lower()
@@ -355,13 +371,21 @@ def dynamic_signals(
                 )
             )
 
+    # The lure families: ClickFix / FileFix, scam pages, phishing-kit tells.
+    signals.extend(clickfix_signals(url, result))
+    signals.extend(scam_page_signals(url, result, final_host, final_popular))
+    signals.extend(kit_signals(url, result, final_host=final_host, final_rd=final_rd, final_popular=final_popular,
+                               page_brands=page_brands if from_page else ()))
+
     for download in result.downloads:
         if _download_is_dangerous(download):
+            info = describe_download(download)
             signals.append(
                 make_signal(
                     "dynamic.dangerous_download", SignalStage.DYNAMIC, 65,
-                    f"Opening the link downloads a program or archive ({download.suggested_filename[:40]})",
-                    filename=download.suggested_filename, sha256=download.sha256, sniffed_type=download.sniffed_type, **ev,
+                    f"Opening the link downloads a dangerous file ({download.suggested_filename[:40]})",
+                    info.why, filename=download.suggested_filename, sha256=download.sha256,
+                    sniffed_type=download.sniffed_type, category=info.category, **ev,
                 )
             )
         else:
@@ -461,4 +485,10 @@ def file_dynamic_signals(filename: str, result: DetonationResult) -> list[Signal
                 f"Opening {filename[:40]} shows a password prompt", **ev,
             )
         )
+    # An HTML/SVG attachment can be a ClickFix page or a scam page too.
+    target = f"file:{filename}"
+    for sig in clickfix_signals(target, result) + scam_page_signals(target, result, "", False):
+        sig.evidence.pop("url", None)
+        sig.evidence["filename"] = filename
+        signals.append(sig)
     return signals

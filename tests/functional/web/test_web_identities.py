@@ -404,7 +404,10 @@ async def test_connect_yahoo_tests_then_saves(client, seed, login, csrf_of, db, 
     assert "Yahoo accepted the app password" in client.get("/mailboxes").text
     again = client.post("/mailboxes/connect-yahoo", data={"csrf_token": token, "address": "me@yahoo.com",
                                                           "app_password": "abcdefghijklmnop"})
-    assert again.status_code == 400 and "already connected" in again.text
+    # Connecting a connected Yahoo mailbox again is "Reconnect": the new, tested password replaces ours.
+    assert again.status_code == 303
+    assert "Reconnected" in client.get("/mailboxes").text
+    assert len(await _mailboxes(db)) == 1
     client.post("/mailboxes/connect-yahoo", data={"csrf_token": token, "address": "me@aol.com", "app_password": "x"})
     assert tested[-1][0] == "imap.aol.com"
 
@@ -474,3 +477,38 @@ async def test_outlook_without_microsoft_configured_uses_imap(settings, db, arti
         assert "Use Sign in with Microsoft instead" not in c.get("/mailboxes/add-imap?address=a@outlook.com").text
         page = c.get("/mailboxes").text
         assert 'href="/mailboxes/add-imap?provider=outlook"' in page and "/auth/google/link" not in page
+
+
+async def test_microsoft_and_yahoo_sign_in_ask_for_the_authenticator_code(client, db, enable_totp, pass_mfa, csrf_of):
+    """Two-step sign-in applies to every provider: the session starts only
+    after the code (web.mfa)."""
+    from reddysec.store.models import MfaStateRow
+
+    first = _callback(client, "microsoft", client.get("/auth/microsoft/start?next=/mailboxes"))
+    assert first.status_code == 303 and first.headers["location"] == "/mailboxes"
+    (user,) = await _users(db)
+    secret = await enable_totp(user.id)
+    client.post("/auth/logout", data={"csrf_token": csrf_of(client, "/")})
+
+    again = _callback(client, "microsoft", client.get("/auth/microsoft/start?next=/mailboxes"))
+    assert again.headers["location"] == "/auth/mfa" and client.get("/").status_code == 303
+    assert "Microsoft" in client.get("/auth/mfa").text
+    assert pass_mfa(client, secret).headers["location"] == "/mailboxes"
+    assert client.get("/").status_code == 200
+    client.post("/auth/logout", data={"csrf_token": csrf_of(client, "/")})
+
+    # Yahoo signs the same person in after linking; it too waits for the code.
+    async with db.session() as s:
+        await queries_link(s, user, "yahoo", "ysub", "avery.l@yahoo.com")
+        (await s.get(MfaStateRow, user.id)).last_step = 0
+    y = _callback(client, "yahoo", client.get("/auth/yahoo/start"))
+    assert y.headers["location"] == "/auth/mfa"
+    assert pass_mfa(client, secret).headers["location"].startswith("/mailboxes/connect-yahoo?address=")
+
+
+async def queries_link(session, user, provider, subject, email):
+    from reddysec.store.models import UserRow
+    from reddysec.web import queries
+
+    await queries.link_identity(session, await session.get(UserRow, user.id), provider=provider, subject=subject,
+                                email=email, email_verified=True)

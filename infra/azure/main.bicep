@@ -143,6 +143,16 @@ param anthropicEnabled bool = false
 param llmProvider string = ''
 @description('RS_ASSISTANT_PROVIDER for Ask Secureddy; empty follows RS_LLM_PROVIDER.')
 param assistantProvider string = ''
+
+param assistantModel string = 'claude-sonnet-5-5'
+param anthropicModel string = 'claude-haiku-5-5'
+@description('Keyless Claude (WIF) identifiers; see docs/claude-keyless-setup.md. Empty = use the API key.')
+param anthropicWebFederationRuleId string = ''
+param anthropicWorkerFederationRuleId string = ''
+param anthropicOrganizationId string = ''
+param anthropicServiceAccountId string = ''
+param anthropicWorkspaceId string = ''
+param anthropicWifAudience string = ''
 param safeBrowsingEnabled bool = false
 param azureOpenAiEnabled bool = false
 param azureOpenAiEndpoint string = ''
@@ -430,6 +440,14 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
     anthropicEnabled: anthropicEnabled
     llmProvider: llmProvider
     assistantProvider: assistantProvider
+    assistantModel: assistantModel
+    anthropicModel: anthropicModel
+    anthropicWebFederationRuleId: anthropicWebFederationRuleId
+    anthropicWorkerFederationRuleId: anthropicWorkerFederationRuleId
+    anthropicOrganizationId: anthropicOrganizationId
+    anthropicServiceAccountId: anthropicServiceAccountId
+    anthropicWorkspaceId: anthropicWorkspaceId
+    anthropicWifAudience: anthropicWifAudience
     safeBrowsingEnabled: safeBrowsingEnabled
     azureOpenAiEnabled: azureOpenAiEnabled
     azureOpenAiEndpoint: azureOpenAiEndpoint

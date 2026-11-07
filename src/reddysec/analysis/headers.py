@@ -160,9 +160,24 @@ def _history_signals(parsed: ParsedMessage, history: SenderHistory | None) -> li
     return signals
 
 
+_HIDDEN_NAME_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e\u202a-\u202e\u2066-\u2069\u200e\u200f]")
+
+
 def _display_name_signals(parsed: ParsedMessage) -> list[Signal]:
     signals: list[Signal] = []
-    name = (parsed.from_name or "").strip()
+    raw_name = (parsed.from_name or "").strip()
+    # Invisible characters split "Pay\u200bPal" so filters miss the brand; judge
+    # the name the reader sees.
+    name = _HIDDEN_NAME_RE.sub("", raw_name)
+    if name != raw_name:
+        signals.append(
+            make_signal(
+                "sender.display_hidden_chars", SignalStage.STATIC, 30,
+                "The sender's name hides invisible characters",
+                "Invisible characters break up a company name so spam filters cannot read it.",
+                shown=name[:80],
+            )
+        )
     from_rd = registrable_domain(parsed.from_domain) if parsed.from_domain else ""
     own_brand = brand_for_domain(from_rd) if from_rd else None
     shown_address = _display_name_address(name, parsed.from_address)

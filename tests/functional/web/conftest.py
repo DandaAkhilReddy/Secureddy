@@ -99,6 +99,76 @@ class FakeOAuthProvider:
         )
 
 
+class FakeConnector:
+    """A mailbox connector for the web tests: canned raw messages and search
+    results, and a record of every action. ``fail_with`` makes every call raise."""
+
+    def __init__(self, registry: FakeConnectors, mailbox: Any) -> None:
+        self.registry = registry
+        self.mailbox = mailbox
+        self.closed = False
+
+    def _check(self) -> None:
+        if self.registry.fail_with is not None:
+            raise self.registry.fail_with
+
+    async def fetch_raw(self, provider_message_id: str) -> bytes:
+        self._check()
+        self.registry.calls.append(("fetch_raw", self.mailbox.id, provider_message_id))
+        if provider_message_id not in self.registry.raw:
+            from reddysec.mail.base import ConnectorError
+
+            raise ConnectorError("not found", retryable=False)
+        return self.registry.raw[provider_message_id]
+
+    async def search(self, query: str, limit: int = 20) -> list:
+        self._check()
+        self.registry.calls.append(("search", self.mailbox.id, query))
+        return list(self.registry.hits.get(self.mailbox.id, []))[:limit]
+
+    async def archive(self, pid: str) -> None:
+        self._check()
+        self.registry.calls.append(("archive", self.mailbox.id, pid))
+
+    async def set_read(self, pid: str, read: bool) -> None:
+        self._check()
+        self.registry.calls.append(("read" if read else "unread", self.mailbox.id, pid))
+
+    async def trash(self, pid: str) -> None:
+        self._check()
+        self.registry.calls.append(("trash", self.mailbox.id, pid))
+
+    async def web_link(self, pid: str) -> str:
+        self._check()
+        return f"https://mail.example/{self.mailbox.provider}/{pid}"
+
+    async def revoke(self) -> bool:
+        self._check()
+        self.registry.calls.append(("revoke", self.mailbox.id, ""))
+        return self.registry.revoke_result
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class FakeConnectors:
+    """``create_app(connector_factory=...)``: one FakeConnector per call."""
+
+    def __init__(self) -> None:
+        self.raw: dict[str, bytes] = {}
+        self.hits: dict[str, list] = {}
+        self.calls: list[tuple[str, str, str]] = []
+        self.fail_with: Exception | None = None
+        self.revoke_result = True
+
+    async def __call__(self, mailbox: Any) -> FakeConnector:
+        if self.registry_error is not None:
+            raise self.registry_error
+        return FakeConnector(self, mailbox)
+
+    registry_error: Exception | None = None
+
+
 class PushRecorder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -160,7 +230,12 @@ def room_calls() -> list[dict[str, str]]:
 
 
 @pytest.fixture
-def app(settings, db, oauth, push, room_calls, artifact_store):
+def connectors() -> FakeConnectors:
+    return FakeConnectors()
+
+
+@pytest.fixture
+def app(settings, db, oauth, push, room_calls, artifact_store, connectors):
     return create_app(
         settings,
         db=db,
@@ -169,6 +244,7 @@ def app(settings, db, oauth, push, room_calls, artifact_store):
         on_gmail_push=push,
         pubsub_token="pubsub-shared-token",
         artifact_store=artifact_store,
+        connector_factory=connectors,
     )
 
 
@@ -208,6 +284,58 @@ def csrf_of():
 @pytest.fixture
 def login():
     return _login
+
+
+def _code(secret: str, steps: int = 0) -> str:
+    """The authenticator code ``steps`` 30-second steps from now. Each code is
+    accepted once, so a test that needs two codes in a row uses steps=1 for
+    the second (one step of drift is allowed)."""
+    import time
+
+    import pyotp
+
+    return pyotp.TOTP(secret).at(time.time() + 30 * steps)
+
+
+def _pass_mfa(client: TestClient, secret: str, *, steps: int = 0, remember: bool = False):
+    token = _csrf_of(client, "/auth/mfa")
+    data = {"code": _code(secret, steps), "csrf_token": token}
+    if remember:
+        data["remember"] = "1"
+    response = client.post("/auth/mfa", data=data)
+    assert response.status_code == 303, response.text
+    return response
+
+
+async def _enable_totp(db, settings, user_id: str) -> str:
+    """Turn two-step sign-in on for a seeded account; returns the secret."""
+    import pyotp
+
+    from reddysec.core.crypto import TokenCipher
+
+    secret = pyotp.random_base32()
+    cipher = TokenCipher.from_settings(settings.token_kek.get_secret_value(), settings.secret_key.get_secret_value())
+    async with db.session() as s:
+        (await s.get(UserRow, user_id)).totp_secret_enc = cipher.encrypt(secret, aad=user_id)
+    return secret
+
+
+@pytest.fixture
+def totp_code():
+    return _code
+
+
+@pytest.fixture
+def pass_mfa():
+    return _pass_mfa
+
+
+@pytest.fixture
+def enable_totp(db, settings):
+    async def enable(user_id: str) -> str:
+        return await _enable_totp(db, settings, user_id)
+
+    return enable
 
 
 @pytest.fixture

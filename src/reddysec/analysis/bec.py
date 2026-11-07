@@ -19,17 +19,24 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
+from reddysec.core.anthropic_auth import (
+    AnthropicAuthError,
+    get_anthropic_auth_headers,
+    invalidate_default_credentials,
+)
 from reddysec.core.logging import get_logger
 from reddysec.models import ParsedMessage, SenderHistory, Signal, SignalStage
 
 from .common import EMAIL_RE, is_freemail, make_signal, truncate
 from .domains import lookalike_analysis
 from .intel import is_popular
+from .lures import email_lure_signals
 from .urls import registrable_domain
 
 log = get_logger(__name__)
@@ -300,6 +307,7 @@ def bec_signals(
                 signature_domains=foreign[:3], from_domain=from_rd,
             )
         )
+    signals.extend(email_lure_signals(parsed, parsed.text_body[:MAX_BODY_FOR_ANALYSIS] if parsed.text_body else ""))
     return signals
 
 
@@ -450,6 +458,9 @@ def _strip_fence(text: str) -> str:
     return _JSON_FENCE.sub("", text.strip())
 
 
+AuthHeaders = Callable[[], Awaitable[dict[str, str]]]
+
+
 class AnthropicAssessor:
     """Claude via the Anthropic Messages API (``POST /v1/messages``).
 
@@ -457,14 +468,23 @@ class AnthropicAssessor:
     ``None``. We ask for JSON only and tolerate a stray code fence. The prompt
     never contains client identity beyond what is in the email itself, and the
     body is truncated so a 40-page newsletter cannot run up the bill.
+
+    Credentials: ``auth_headers`` returns the headers for one request (the
+    settings factory passes :func:`reddysec.core.anthropic_auth.get_anthropic_auth_headers`,
+    which is keyless Workload Identity Federation when configured and the API
+    key otherwise). A plain ``api_key`` is still accepted for tests and
+    scripts. With keyless credentials a 401 drops the cached token
+    (``on_unauthorized``) and the request is tried once more.
     """
 
     def __init__(
         self,
         http: httpx.AsyncClient,
-        api_key: str,
-        model: str,
+        api_key: str = "",
+        model: str = "",
         *,
+        auth_headers: AuthHeaders | None = None,
+        on_unauthorized: Callable[[], None] | None = None,
         base_url: str = "https://api.anthropic.com",
         api_version: str = "2023-06-01",
         timeout_s: float = 8.0,
@@ -472,6 +492,8 @@ class AnthropicAssessor:
     ) -> None:
         self._http = http
         self._api_key = api_key
+        self._auth_headers = auth_headers
+        self._on_unauthorized = on_unauthorized
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._api_version = api_version
@@ -482,8 +504,33 @@ class AnthropicAssessor:
     def url(self) -> str:
         return f"{self._base_url}/v1/messages"
 
+    @property
+    def configured(self) -> bool:
+        return bool(self._model) and (self._auth_headers is not None or bool(self._api_key))
+
+    async def _credentials(self) -> dict[str, str]:
+        if self._auth_headers is not None:
+            return dict(await self._auth_headers())
+        return {"x-api-key": self._api_key}
+
+    async def _post(self, payload: dict[str, Any]) -> httpx.Response | None:
+        for attempt in (1, 2):
+            try:
+                auth = await self._credentials()
+            except AnthropicAuthError as exc:
+                log.warning("llm_auth_failed", status=exc.status)
+                return None
+            headers = {**auth, "anthropic-version": self._api_version, "content-type": "application/json"}
+            resp = await self._http.post(self.url, json=payload, headers=headers, timeout=self._timeout)
+            keyless = "authorization" in {k.lower() for k in auth}
+            if resp.status_code == 401 and keyless and attempt == 1 and self._on_unauthorized is not None:
+                self._on_unauthorized()
+                continue
+            return resp
+        return None  # pragma: no cover - the loop always returns
+
     async def assess(self, parsed: ParsedMessage, static_summary: str) -> LlmAssessment | None:
-        if not self._api_key or not self._model:
+        if not self.configured:
             return None
         payload: dict[str, Any] = {
             "model": self._model,
@@ -492,18 +539,15 @@ class AnthropicAssessor:
             "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": self._builder.build_user_message(parsed, static_summary)}],
         }
-        headers = {
-            "x-api-key": self._api_key,
-            "anthropic-version": self._api_version,
-            "content-type": "application/json",
-        }
         try:
-            resp = await self._http.post(self.url, json=payload, headers=headers, timeout=self._timeout)
+            resp = await self._post(payload)
         except httpx.HTTPError as exc:
             log.warning("llm_request_failed", error=type(exc).__name__)
             return None
         except Exception as exc:
-            log.warning("llm_request_error", error=str(exc))
+            log.warning("llm_request_error", error=type(exc).__name__)
+            return None
+        if resp is None:
             return None
         if resp.status_code != 200:
             log.warning("llm_bad_status", status=resp.status_code)
@@ -526,8 +570,18 @@ def llm_from_settings(settings: Any, http: httpx.AsyncClient | None = None) -> L
         return NoopLlm()
     client = http or httpx.AsyncClient()
     if provider == "anthropic":
+        if not getattr(settings, "anthropic_configured", False):
+            return NoopLlm()
+
+        async def auth_headers() -> dict[str, str]:
+            return await get_anthropic_auth_headers(settings)
+
         return AnthropicAssessor(
-            client, settings.anthropic_api_key.get_secret_value(), settings.anthropic_model
+            client,
+            model=settings.anthropic_model,
+            auth_headers=auth_headers,
+            on_unauthorized=invalidate_default_credentials,
+            base_url=getattr(settings, "anthropic_base_url", "") or "https://api.anthropic.com",
         )
     if provider == "azure_foundry":
         return AzureFoundryAssessor(

@@ -179,6 +179,20 @@ def fallback_verdict(reason: str, *, released: bool) -> Verdict:
     )
 
 
+def fill_metadata(row: MessageRow, parsed: ParsedMessage) -> None:
+    """Metadata from a parsed message, for a row created before we had it."""
+    if parsed.rfc_message_id and not row.rfc_message_id:
+        row.rfc_message_id = parsed.rfc_message_id[:2000]
+    if parsed.from_address:
+        row.from_address = parsed.from_address[:320]
+    if parsed.from_name:
+        row.from_name = parsed.from_name[:300]
+    if parsed.subject:
+        row.subject = parsed.subject[:1000]
+    row.url_count = len(parsed.urls)
+    row.attachment_count = len(parsed.real_attachments)
+
+
 def policy_for(mailbox: MailboxRow) -> PolicyConfig:
     """The mailbox's stored policy with its mode made authoritative. A corrupt
     policy document falls back to defaults rather than stopping protection."""
@@ -685,6 +699,10 @@ class Worker:
         async with self._db.session() as session:
             fresh = await repo.get_message(session, row.id) or row
             previous_level = fresh.level
+            if fresh.verdict is None:
+                # Never checked before ("Check now" on a search result): the row
+                # only has what the search showed, so fill in what parsing knows.
+                fill_metadata(fresh, parsed)
             await repo.record_rescore(session, fresh, verdict, quarantined)
             for url in verdict.urls:
                 if url.detonation_job_id:

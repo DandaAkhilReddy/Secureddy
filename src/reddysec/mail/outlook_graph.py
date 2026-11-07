@@ -55,8 +55,11 @@ from reddysec.mail.base import (
     LABEL_ROOT,
     LABEL_SAFE,
     LABEL_SUSPICIOUS,
+    SEARCH_MAX,
     AuthExpired,
     ConnectorError,
+    SearchHit,
+    clean_query,
 )
 from reddysec.mail.gmail import GoogleCredentials as OAuthCredentials
 from reddysec.mail.gmail import should_quarantine
@@ -490,6 +493,62 @@ class GraphMailConnector:
 
     async def teardown(self) -> None:
         await self._delete_hold_rules()
+
+    # ------------------------------------------------- reading and tidying mail
+    async def search(self, query: str, limit: int = 20) -> list[SearchHit]:
+        """Microsoft's own search (``$search``) across the mailbox."""
+        q = clean_query(query)
+        if not q:
+            return []
+        body = await self._request(
+            "GET",
+            "messages",
+            params={
+                "$search": f'"{q}"',
+                "$top": max(1, min(limit, SEARCH_MAX)),
+                "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
+            },
+        )
+        hits: list[SearchHit] = []
+        for item in body.get("value", []):
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            sender = ((item.get("from") or {}).get("emailAddress") or {}) if isinstance(item.get("from"), dict) else {}
+            hits.append(
+                SearchHit(
+                    provider_message_id=str(item["id"]),
+                    from_name=str(sender.get("name") or ""),
+                    from_address=str(sender.get("address") or "").lower(),
+                    subject=str(item.get("subject") or ""),
+                    received_at=_parse_dt(item.get("receivedDateTime")),
+                    snippet=str(item.get("bodyPreview") or "")[:300],
+                    unread=item.get("isRead") is False,
+                )
+            )
+        return hits
+
+    async def archive(self, provider_message_id: str) -> None:
+        await self._request("POST", f"messages/{provider_message_id}/move", json_body={"destinationId": "archive"})
+
+    async def set_read(self, provider_message_id: str, read: bool) -> None:
+        await self._request("PATCH", f"messages/{provider_message_id}", json_body={"isRead": bool(read)})
+
+    async def trash(self, provider_message_id: str) -> None:
+        """Outlook's Deleted Items, never a permanent delete."""
+        await self._request(
+            "POST", f"messages/{provider_message_id}/move", json_body={"destinationId": "deleteditems"}
+        )
+
+    async def web_link(self, provider_message_id: str) -> str:
+        body = await self._request("GET", f"messages/{provider_message_id}", params={"$select": "webLink"})
+        link = str(body.get("webLink") or "")
+        return link if link.startswith("https://") else "https://outlook.live.com/mail/"
+
+    async def revoke(self) -> bool:
+        """Microsoft has no endpoint that revokes one app's refresh token: we
+        delete our copy, and the person removes the app from their account
+        (account.live.com/consent/Manage, or myapps.microsoft.com for work)."""
+        return False
 
     # ------------------------------------------------------------ internals
     @staticmethod

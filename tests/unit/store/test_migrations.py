@@ -63,10 +63,10 @@ async def test_duplicates_merge_into_the_working_row(old_db: Database):
         other_user = UserRow(id=new_id("usr"), display_name="Other", login_email="other@example.com")
         s.add_all([user, other_user])
         await s.flush()
-        stale = mailbox(user.id, "Danda@Yahoo.com", status="disconnected", age_days=2)
-        keep = mailbox(user.id, "danda@yahoo.com", age_days=1)
-        newer_no_secret = mailbox(user.id, "danda@yahoo.com", status="error", provider="imap")
-        unrelated = mailbox(other_user.id, "danda@yahoo.com")  # another person's account: untouched
+        stale = mailbox(user.id, "Client@Yahoo.com", status="disconnected", age_days=2)
+        keep = mailbox(user.id, "client@yahoo.com", age_days=1)
+        newer_no_secret = mailbox(user.id, "client@yahoo.com", status="error", provider="imap")
+        unrelated = mailbox(other_user.id, "client@yahoo.com")  # another person's account: untouched
         s.add_all([stale, keep, newer_no_secret, unrelated])
         await s.flush()
         s.add(MailboxSecret(mailbox_id=keep.id, kind="imap_password", ciphertext="c", key_id="k"))
@@ -114,7 +114,7 @@ async def test_duplicates_merge_into_the_working_row(old_db: Database):
         assert [x.mailbox_id for x in (await s.execute(select(MailboxSecret))).scalars()] == [keep.id]
     with pytest.raises(IntegrityError):
         async with old_db.session() as s:
-            s.add(mailbox(user.id, "DANDA@yahoo.com"))
+            s.add(mailbox(user.id, "CLIENT@yahoo.com"))
     assert await old_db.create_all() == []
 
 

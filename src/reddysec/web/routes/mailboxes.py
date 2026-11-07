@@ -1,4 +1,7 @@
-"""Mailbox onboarding and protection settings.
+"""Your accounts: every connected mailbox, one card each, with the same
+actions everywhere (open inbox, pause/resume, reconnect, re-check, settings,
+sign out of this mailbox), plus onboarding (Gmail and Outlook in one click,
+Yahoo guided).
 
 Only the owner may change a mailbox. A helper account (family, assistant) can
 read the mail it protects but a wrong click on their side must not switch the
@@ -8,17 +11,23 @@ principal's protection off, so every mutation uses ``manage=True`` and answers
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from fastapi import Depends, Form, HTTPException, Request, status
 from starlette.responses import RedirectResponse, Response
 
+from reddysec.core.logging import get_logger
 from reddysec.mail.base import AuthExpired, ConnectorError
 from reddysec.store.models import UserRow
 
 from .. import presenters, queries
-from ..auth import current_user
+from ..auth import _begin_oauth, current_user
 from ..security import flash
 from ..templating import render
 from . import protected_router
+from .mailread import close_connector
+
+log = get_logger(__name__)
 
 router = protected_router()
 
@@ -43,6 +52,7 @@ async def mailboxes_page(request: Request, user: UserRow = Depends(current_user)
         mailboxes = await queries.list_mailboxes(session, user)
         entries = await queries.list_sender_feedback(session, [m.id for m in mailboxes])
         reasons, stats = await queries.sender_entry_context(session, entries)
+        weeks = await queries.mailbox_week_counts(session, user)
     settings = request.app.state.settings
     by_mailbox: dict[str, list] = {}
     for entry in sorted(entries, key=lambda e: (e.decision != "trusted", e.value)):
@@ -61,11 +71,13 @@ async def mailboxes_page(request: Request, user: UserRow = Depends(current_user)
                 {
                     "row": m,
                     "status": presenters.mailbox_status_chip(m),
+                    "account": presenters.account_status(m),
                     "mode": presenters.mode_chip(m),
                     "owned": m.user_id == user.id,
                     "senders": by_mailbox.get(m.id, []),
+                    "week": weeks.get(m.id, queries.MailboxWeek()),
                 }
-                for m in mailboxes
+                for m in sorted(mailboxes, key=lambda m: (m.status == "disconnected", m.created_at))
             ],
             "hold_minutes": settings.hold_dead_man_minutes,
             "hold_timeout_s": settings.hold_timeout_s,
@@ -226,14 +238,17 @@ async def connect_yahoo_submit(
         return _connect_yahoo_page(request, address=address, error=YAHOO_UNREACHABLE, status_code=502)
     async with request.app.state.db.session() as session:
         existing = await queries.find_mailbox_by_address(session, user.id, address)
-        if queries.mailbox_is_connected(existing):
-            return _connect_yahoo_page(request, address=address, error="That mailbox is already connected.",
-                                       status_code=400)
+        # Yahoo just accepted this password, so replacing the one we have is
+        # exactly what "Reconnect" means for a connected mailbox.
+        reconnect = existing is not None
         await queries.add_imap_mailbox(
             session, request.app.state.cipher, user, provider="yahoo", address=address, host=host,
             port=spec.port, password=password,
         )
-    flash(request, "Connected. Yahoo accepted the app password, and we start checking new email within a minute.")
+    if reconnect:
+        flash(request, "Reconnected. Yahoo accepted the new app password.")
+    else:
+        flash(request, "Connected. Yahoo accepted the app password, and we start checking new email within a minute.")
     return _see_other()
 
 
@@ -283,12 +298,55 @@ async def mailbox_resume(
 async def mailbox_disconnect(
     request: Request, mailbox_id: str, user: UserRow = Depends(current_user)
 ) -> Response:
+    """"Sign out of this mailbox": cancel our access where the provider lets
+    us (Google's revoke endpoint), delete our copy of the token or app
+    password, stop checking. The person's mail and our past reports stay."""
     async with request.app.state.db.session() as session:
         mailbox = await _owned_or_404(session, user, mailbox_id)
-        if mailbox.status != "disconnected":
+        already = mailbox.status == "disconnected"
+    revoked = False
+    if not already:
+        try:
+            connector = await request.app.state.connector_factory(mailbox)
+            try:
+                revoke = getattr(connector, "revoke", None)
+                revoked = bool(await revoke()) if callable(revoke) else False
+            finally:
+                await close_connector(connector)
+        except Exception as exc:  # noqa: BLE001 - signing out must work even when the provider does not answer
+            log.info("mailbox_revoke_failed", mailbox_id=mailbox.id, error=type(exc).__name__)
+        async with request.app.state.db.session() as session:
+            mailbox = await _owned_or_404(session, user, mailbox_id)
             await queries.disconnect_mailbox(session, user, mailbox)
-    flash(request, "The mailbox is disconnected and its password or token has been deleted from our systems.")
+            queries.audit(session, actor=user, action="mailbox_signed_out", mailbox_id=mailbox.id,
+                          target=mailbox.address, details={"provider_revoked": revoked})
+    help_text = presenters.SIGN_OUT_HELP.get(mailbox.provider, presenters.SIGN_OUT_HELP_DEFAULT)
+    if mailbox.provider == "gmail" and not revoked:
+        help_text = ("We deleted our access. Google did not confirm the cancellation, so you can also remove "
+                     "Secureddy at myaccount.google.com/permissions.")
+    flash(request, f"Signed out of {mailbox.address}. {help_text}", "info")
     return _see_other()
+
+
+@router.post("/mailboxes/{mailbox_id}/reconnect", name="mailbox_reconnect")
+async def mailbox_reconnect(request: Request, mailbox_id: str, user: UserRow = Depends(current_user)) -> Response:
+    """Run the same one-click sign-in again for this address (Gmail, Outlook)
+    or the guided app-password step (Yahoo and other IMAP mailboxes)."""
+    async with request.app.state.db.session() as session:
+        mailbox = await _owned_or_404(session, user, mailbox_id)
+    if mailbox.provider == "gmail":
+        if request.app.state.oauth is None:
+            flash(request, "Google sign-in is not set up on this server.", "warn")
+            return _see_other()
+        return _begin_oauth(request, "google", "/mailboxes", link=user.id, login_hint=mailbox.address)
+    if mailbox.provider == "microsoft":
+        if request.app.state.microsoft_oauth is None:
+            flash(request, "Microsoft sign-in is not set up on this server.", "warn")
+            return _see_other()
+        return _begin_oauth(request, "microsoft", "/mailboxes", link=user.id, login_hint=mailbox.address)
+    if mailbox.provider == "yahoo":
+        return _see_other("/mailboxes/connect-yahoo?" + urlencode({"address": mailbox.address}))
+    return _see_other("/mailboxes/add-imap?" + urlencode({"address": mailbox.address, "provider": mailbox.provider}))
 
 
 @router.post("/mailboxes/{mailbox_id}/senders/{entry_id}/remove", name="sender_feedback_remove")

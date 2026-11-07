@@ -8,7 +8,9 @@ room, not a hidden camera.
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parseaddr
 from typing import Protocol, runtime_checkable
 
 from reddysec.models import PolicyConfig, ProtectionMode, Provider, RawMessage, Verdict
@@ -94,4 +96,61 @@ class MailboxConnector(Protocol):
 
     async def teardown(self) -> None:
         """Remove the HOLD rule so mail flows normally. Labels stay."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Reading and tidying mail from inside Secureddy
+# ---------------------------------------------------------------------------
+
+SEARCH_MAX = 25
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    """One result of a live provider search. Nothing here is stored: the web
+    page shows it, matches it to a checked email by ``provider_message_id``
+    and offers "Check now" for the rest."""
+
+    provider_message_id: str
+    from_name: str
+    from_address: str
+    subject: str
+    received_at: datetime | None
+    snippet: str = ""
+    unread: bool = False
+
+
+def split_from(value: str | None) -> tuple[str, str]:
+    """``"Ann <ann@x.com>"`` -> ("Ann", "ann@x.com")."""
+    name, address = parseaddr(value or "")
+    return name.strip(), address.strip().lower()
+
+
+def clean_query(query: str, limit: int = 200) -> str:
+    """A search phrase safe to hand to any provider: no quotes, backslashes or
+    control characters, single spaces, at most ``limit`` characters."""
+    text = "".join(ch for ch in (query or "") if ch.isprintable() and ch not in '"\\')
+    return " ".join(text.split())[:limit]
+
+
+@runtime_checkable
+class MailActions(Protocol):
+    """What the web app asks of a connector beyond checking mail: search,
+    archive, read/unread, move to the provider's Trash, a link to the message
+    in the provider's own web app, and revoking our access ("Sign out of this
+    mailbox"). Gmail, Microsoft Graph and IMAP implement it."""
+
+    async def search(self, query: str, limit: int = 20) -> list[SearchHit]: ...
+
+    async def archive(self, provider_message_id: str) -> None: ...
+
+    async def set_read(self, provider_message_id: str, read: bool) -> None: ...
+
+    async def trash(self, provider_message_id: str) -> None: ...
+
+    async def web_link(self, provider_message_id: str) -> str: ...
+
+    async def revoke(self) -> bool:
+        """Revoke our grant where the provider allows it. True when revoked."""
         ...

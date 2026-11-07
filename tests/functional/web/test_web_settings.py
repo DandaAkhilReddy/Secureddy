@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import re
 
-import pyotp
 from sqlalchemy import select
 
 from reddysec.core.crypto import TokenCipher
 from reddysec.store.models import AuditLog, UserRow
 
-KEY_RE = re.compile(r'<code class="manual-key">([^<]+)</code>')
+KEY_RE = re.compile(r'<code class="manual-key"[^>]*>([^<]+)</code>')
 
 
 def _cipher(settings) -> TokenCipher:
@@ -29,7 +28,7 @@ async def _actions(db):
         return [a.action for a in (await s.execute(select(AuditLog).order_by(AuditLog.at))).scalars()]
 
 
-async def test_totp_enrolment_then_login_with_code(client, db, settings, login, csrf_of):
+async def test_totp_enrolment_then_login_with_code(client, db, settings, login, csrf_of, totp_code, pass_mfa):
     login(client, "secure@example.com")
     page = client.get("/settings/security")
     assert page.status_code == 200 and "Off" in page.text and "Not set" in page.text
@@ -44,14 +43,12 @@ async def test_totp_enrolment_then_login_with_code(client, db, settings, login, 
     assert "did not match" in client.get("/settings/security").text
     assert (await _user(db, "secure@example.com")).totp_secret_enc is None
 
-    good = client.post(
-        "/settings/security/totp/enable", data={"code": pyotp.TOTP(key).now(), "csrf_token": token}
-    )
-    assert good.status_code == 303
+    good = client.post("/settings/security/totp/enable", data={"code": totp_code(key), "csrf_token": token})
+    assert good.status_code == 200 and "Recovery codes" in good.text and "Two-step sign-in is on" in good.text
     user = await _user(db, "secure@example.com")
     assert user.totp_secret_enc and _cipher(settings).decrypt(user.totp_secret_enc, aad=user.id) == key
     page = client.get("/settings/security")
-    assert "2-step sign-in is on" in page.text and ">On<" in page.text and "manual-key" not in page.text
+    assert "Every sign-in, with Google" in page.text and ">On<" in page.text and "manual-key" not in page.text
 
     # Set a password, sign out, and sign back in with password + code.
     client.post(
@@ -73,27 +70,28 @@ async def test_totp_enrolment_then_login_with_code(client, db, settings, login, 
             "csrf_token": login_token,
         },
     )
-    assert step1.status_code == 200 and 'name="code"' in step1.text
-    step2 = client.post("/auth/login", data={"code": pyotp.TOTP(key).now(), "csrf_token": login_token})
-    assert step2.status_code == 303 and client.get("/").status_code == 200
+    assert step1.status_code == 303 and step1.headers["location"] == "/auth/mfa"
+    pass_mfa(client, key, steps=1)  # the code used to turn it on cannot be used again
+    assert client.get("/").status_code == 200
     assert "totp_enabled" in await _actions(db) and "password_set" in await _actions(db)
 
 
-async def test_totp_disable_requires_current_code(client, db, settings, seed, login, csrf_of):
-    secret = pyotp.random_base32()
+async def test_totp_disable_requires_current_code(client, db, seed, login, csrf_of, enable_totp, totp_code, pass_mfa):
     user = await seed.user("off@example.com")
-    async with db.session() as s:
-        (await s.get(UserRow, user.id)).totp_secret_enc = _cipher(settings).encrypt(secret, aad=user.id)
+    secret = await enable_totp(user.id)
     login(client, "off@example.com")
+    pass_mfa(client, secret)
     token = csrf_of(client, "/settings/security")
     client.post("/settings/security/totp/disable", data={"code": "123456", "csrf_token": token})
     assert (await _user(db, "off@example.com")).totp_secret_enc is not None
     assert "stays on" in client.get("/settings/security").text
-    client.post(
-        "/settings/security/totp/disable", data={"code": pyotp.TOTP(secret).now(), "csrf_token": token}
-    )
+    # The code used to sign in moments ago is refused: each code works once.
+    client.post("/settings/security/totp/disable", data={"code": totp_code(secret), "csrf_token": token})
+    assert (await _user(db, "off@example.com")).totp_secret_enc is not None
+    assert "already used" in client.get("/settings/security").text
+    client.post("/settings/security/totp/disable", data={"code": totp_code(secret, 1), "csrf_token": token})
     assert (await _user(db, "off@example.com")).totp_secret_enc is None
-    assert "2-step sign-in is off" in client.get("/settings/security").text
+    assert "Two-step sign-in is off" in client.get("/settings/security").text
     # Disabling twice is a harmless no-op.
     assert (
         client.post("/settings/security/totp/disable", data={"code": "1", "csrf_token": token}).status_code

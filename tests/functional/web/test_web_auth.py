@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-import pyotp
 from sqlalchemy import select
 from starlette.testclient import TestClient
 
@@ -266,21 +265,22 @@ async def test_password_login_good_and_bad(client, seed, db, csrf_of):
     assert entries[0].details == {"method": "password"}
 
 
-async def test_password_login_with_totp_second_step(client, seed, settings, csrf_of):
-    secret = pyotp.random_base32()
+async def test_password_login_with_totp_second_step(client, seed, enable_totp, totp_code, csrf_of):
     user = await seed.user("totp@example.com", password_hash=hash_password("a long enough password"))
-    async with seed.db.session() as s:
-        row = await s.get(UserRow, user.id)
-        row.totp_secret_enc = _cipher(settings).encrypt(secret, aad=user.id)
+    secret = await enable_totp(user.id)
     token = csrf_of(client)
     step1 = client.post(
         "/auth/login",
         data={"email": "totp@example.com", "password": "a long enough password", "csrf_token": token},
     )
-    assert step1.status_code == 200 and 'name="code"' in step1.text and "authenticator app" in step1.text
-    wrong = client.post("/auth/login", data={"code": "000000", "csrf_token": token})
-    assert wrong.status_code == 401
-    good = client.post("/auth/login", data={"code": pyotp.TOTP(secret).now(), "csrf_token": token})
+    assert step1.status_code == 303 and step1.headers["location"] == "/auth/mfa"
+    assert client.get("/").status_code == 303  # nothing is signed in yet
+    page = client.get("/auth/mfa")
+    assert page.status_code == 200 and 'name="code"' in page.text and "authenticator app" in page.text
+    token = csrf_of(client, "/auth/mfa")
+    wrong = client.post("/auth/mfa", data={"code": "000000", "csrf_token": token})
+    assert wrong.status_code == 401 and "did not match" in wrong.text and "4 tries left" in wrong.text
+    good = client.post("/auth/mfa", data={"code": totp_code(secret), "csrf_token": token})
     assert good.status_code == 303 and good.headers["location"] == "/"
     assert client.get("/").status_code == 200
 
@@ -290,13 +290,12 @@ async def test_totp_code_alone_without_recent_password_is_refused(client, seed, 
     token = csrf_of(client)
     response = client.post("/auth/login", data={"code": "123456", "csrf_token": token})
     assert response.status_code == 401
+    assert client.get("/auth/mfa").headers["location"] == "/login"  # no pending sign-in
 
 
-async def test_password_and_code_in_one_step(client, seed, settings, csrf_of):
-    secret = pyotp.random_base32()
+async def test_password_and_code_in_one_step(client, seed, enable_totp, totp_code, pass_mfa, csrf_of):
     user = await seed.user("onestep@example.com", password_hash=hash_password("a long enough password"))
-    async with seed.db.session() as s:
-        (await s.get(UserRow, user.id)).totp_secret_enc = _cipher(settings).encrypt(secret, aad=user.id)
+    secret = await enable_totp(user.id)
     token = csrf_of(client)
     wrong = client.post(
         "/auth/login",
@@ -307,21 +306,23 @@ async def test_password_and_code_in_one_step(client, seed, settings, csrf_of):
             "csrf_token": token,
         },
     )
-    assert wrong.status_code == 401
-    # A wrong code still counts as a passed password step: retry with the code alone.
-    retry = client.post("/auth/login", data={"code": pyotp.TOTP(secret).now(), "csrf_token": token})
-    assert retry.status_code == 303
+    # A wrong code still counts as a passed password step: the code page asks again.
+    assert wrong.status_code == 303 and wrong.headers["location"] == "/auth/mfa"
+    assert "did not match" in client.get("/auth/mfa").text
+    pass_mfa(client, secret)
+    assert client.get("/").status_code == 200
     client.post("/auth/logout", data={"csrf_token": csrf_of(client, "/")})
     good = client.post(
         "/auth/login",
         data={
             "email": "onestep@example.com",
             "password": "a long enough password",
-            "code": pyotp.TOTP(secret).now(),
+            "code": totp_code(secret, 1),  # the next code: the one above was used
             "csrf_token": csrf_of(client, "/login"),
         },
     )
-    assert good.status_code == 303
+    assert good.status_code == 303 and good.headers["location"] == "/"
+    assert client.get("/").status_code == 200
 
 
 async def test_disabled_account_cannot_sign_in_and_is_logged_out(client, seed, db, login, csrf_of):

@@ -88,7 +88,7 @@ async def test_api_me_and_messages(client, seed, login):
     assert [i["subject"] for i in items] == ["Newest", "Yahoo one"]
     assert (
         items[0]["id"] == newest.id
-        and items[0]["verdict_label"] == "Quarantine"
+        and items[0]["verdict_label"] == "Suspicious"
         and items[0]["quarantined"] is True
     )
     assert items[0]["received_at"].endswith("+00:00")

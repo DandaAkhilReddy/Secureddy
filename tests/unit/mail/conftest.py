@@ -605,6 +605,10 @@ class FakeImapSession:
         if m:
             needle = m.group(1).encode()
             return [u for u in uids if needle in folder.messages[u]["raw"]]
+        m = re.fullmatch(r'TEXT "([^"]+)"', criteria)
+        if m:
+            needle = m.group(1).lower().encode()
+            return [u for u in uids if needle in folder.messages[u]["raw"].lower()]
         raise imaplib.IMAP4.error(f"unsupported search {criteria!r}")
 
     def uid_fetch(self, uids: list[int]) -> list[FetchedMessage]:

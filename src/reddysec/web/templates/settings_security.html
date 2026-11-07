@@ -1,63 +1,311 @@
 {% extends "base.html" %}
-{% from "_macros.html" import csrf, icon with context %}
+{% from "_macros.html" import csrf, icon, provider_logo with context %}
 {% block title %}Settings · Secureddy{% endblock %}
 {% block content %}
 <header class="page-head">
   <h1>Settings</h1>
-  <p class="lede">How Secureddy looks on this device, and how you prove it is you. Password settings matter only for signing in with a password; Google and Microsoft sign-in are protected by them.</p>
+  <p class="lede">How Secureddy looks, how you sign in, and how it stays private on this device.</p>
 </header>
 
-<section class="card" aria-labelledby="look-title">
+<nav class="settings-nav" aria-label="Settings sections">
+  <a href="#look">Appearance</a><a href="#view">Accounts view</a><a href="#signin">Ways to sign in</a><a href="#two-step">Two-step sign-in</a><a href="#lock">App lock</a><a href="#devices">Devices</a><a href="#install">Install on iPhone</a><a href="#password">Password</a>
+</nav>
+
+<section class="card" id="look" aria-labelledby="look-title">
   <div class="card-head">
     <h2 id="look-title">Appearance</h2>
     {{ icon("sun", "ico ico-title") }}
   </div>
-  <form method="post" action="/settings/theme" class="theme-form">
+  <form method="post" action="/settings/theme" class="theme-form" data-theme-form>
     {{ csrf() }}
     <fieldset class="segmented">
       <legend class="sr-only">Appearance</legend>
       {% for value, label in (("system", "Match my device"), ("dark", "Dark"), ("light", "Light")) %}
-      <label class="seg"><input type="radio" name="theme" value="{{ value }}"{% if theme == value %} checked{% endif %}><span>{{ label }}</span></label>
+      <label class="seg"><input type="radio" name="theme" value="{{ value }}"{% if theme == value %} checked{% endif %} data-theme-choice><span>{{ label }}</span></label>
       {% endfor %}
+    </fieldset>
+    <noscript><button class="btn btn-quiet btn-small" type="submit">Save</button></noscript>
+  </form>
+  <p class="muted small">Changes at once and follows you to your other devices.</p>
+</section>
+
+<section class="card" id="view" aria-labelledby="view-title">
+  <div class="card-head">
+    <h2 id="view-title">Show my accounts</h2>
+    {{ icon("inbox", "ico ico-title") }}
+  </div>
+  <p class="muted small">Together: one list with a small tag for each account. Separately: a section for each account, with its own numbers.</p>
+  <form method="post" action="/settings/view" class="theme-form">
+    {{ csrf() }}
+    <fieldset class="segmented">
+      <legend class="sr-only">Show my accounts</legend>
+      <label class="seg"><input type="radio" name="inbox_view" value="together"{% if inbox_view == "together" %} checked{% endif %}><span>Together</span></label>
+      <label class="seg"><input type="radio" name="inbox_view" value="separate"{% if inbox_view == "separate" %} checked{% endif %}><span>Separately</span></label>
     </fieldset>
     <button class="btn btn-quiet btn-small" type="submit">Save</button>
   </form>
 </section>
 
-<section class="card">
+<section class="card" id="signin" aria-labelledby="signin-title">
   <div class="card-head">
-    <h2>2-step sign-in</h2>
-    <span class="chip tone-{{ 'ok' if totp_enabled else 'grey' }}">{{ "On" if totp_enabled else "Off" }}</span>
+    <h2 id="signin-title">Ways to sign in</h2>
+    {{ icon("key", "ico ico-title") }}
+  </div>
+  <p class="muted small">Any of these opens this same Secureddy account. You can only add one while you are signed in here.</p>
+  <ul class="row-list" role="list">
+    {% for i in identities %}
+    <li class="row-item">
+      <span class="mini-logo">{{ provider_logo(i.provider) }}</span>
+      <span class="row-main"><strong>{{ {"google": "Google", "microsoft": "Microsoft", "yahoo": "Yahoo"}.get(i.provider, i.provider) }}</strong><span class="muted small">{{ i.email }}{% if i.last_login_at %} · last used {{ i.last_login_at | ago }}{% endif %}</span></span>
+      {% if sign_in_count > 1 %}
+      <form method="post" action="/settings/sign-in/{{ i.id }}/remove" data-confirm="Stop signing in with {{ i.email }}? Your mailboxes stay protected.">
+        {{ csrf() }}
+        <button class="btn btn-ghost btn-small" type="submit">Remove</button>
+      </form>
+      {% else %}
+      <span class="muted small">Your only way in</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+    {% if has_password %}
+    <li class="row-item">
+      <span class="mini-logo">{{ icon("key", "ico") }}</span>
+      <span class="row-main"><strong>Email and password</strong><span class="muted small">{{ user.login_email }}</span></span>
+      <a class="btn btn-ghost btn-small" href="#password">Change</a>
+    </li>
+    {% endif %}
+    {% if not identities and not has_password %}
+    <li class="row-item"><span class="muted small">You signed in another way. Add Google, Microsoft or Yahoo below so you are never locked out.</span></li>
+    {% endif %}
+  </ul>
+  {% if providers %}
+  <div class="add-ways">
+    {% for key, name in providers %}
+    <form method="post" action="/auth/{{ key }}/link">
+      {{ csrf() }}
+      <input type="hidden" name="purpose" value="signin">
+      <input type="hidden" name="next" value="/settings/security#signin">
+      <button class="pbtn pbtn-{{ key }}" type="submit">{{ provider_logo(key) }}<span>Add {{ name }}</span></button>
+    </form>
+    {% endfor %}
+  </div>
+  <p class="help">Adding Google or Microsoft only adds a way to sign in. To protect that mailbox too, add it on the Accounts page.</p>
+  {% endif %}
+</section>
+
+<section class="card" id="two-step" aria-labelledby="two-step-title">
+  <div class="card-head">
+    <h2 id="two-step-title">Two-step sign-in</h2>
+    <span class="chip tone-{{ 'ok' if totp_enabled else 'grey' }}"><span>{{ "On" if totp_enabled else "Off" }}</span></span>
   </div>
   {% if totp_enabled %}
-  <p>Each password sign-in also asks for a 6-digit code from your authenticator app.</p>
-  <form method="post" action="/settings/security/totp/disable" class="inline-form" data-confirm="Turn off 2-step sign-in? Your account becomes easier to break into.">
-    {{ csrf() }}
-    <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Current code" maxlength="7" required>
-    <button class="btn btn-danger" type="submit">Turn off</button>
-  </form>
-  {% else %}
-  <p>Add a second lock. Open an authenticator app (Google Authenticator, 1Password, Authy or similar), add an account by typing this key, then enter the code it shows.</p>
-  <div class="key-box">
-    <span class="muted small">Key</span>
-    <code class="manual-key">{{ manual_key }}</code>
-    <span class="muted small">Or paste this link into your app</span>
-    <code class="otpauth">{{ otpauth_uri }}</code>
+  <p>Every sign-in, with Google, Microsoft, Yahoo or your password, also asks for a 6-digit code from your authenticator app. You can also use the code to unlock the app lock.</p>
+  <ul class="row-list" role="list">
+    <li class="row-item">
+      <span class="mini-logo">{{ icon("key", "ico") }}</span>
+      <span class="row-main"><strong>Recovery codes</strong><span class="muted small">{{ recovery_left }} of 10 left. Each works once if you lose your phone.</span></span>
+    </li>
+    <li class="row-item">
+      <span class="mini-logo">{{ icon("laptop", "ico") }}</span>
+      <span class="row-main"><strong>Remembered devices</strong><span class="muted small">{{ remembered_devices }} device{{ "s" if remembered_devices != 1 }} skip the code for up to 30 days.</span></span>
+      {% if remembered_devices %}
+      <form method="post" action="/settings/security/totp/forget-devices">
+        {{ csrf() }}
+        <button class="btn btn-quiet btn-small" type="submit">Forget all</button>
+      </form>
+      {% endif %}
+    </li>
+  </ul>
+  <div class="two-step-actions">
+    <form method="post" action="/settings/security/totp/recovery" class="inline-form">
+      {{ csrf() }}
+      <label class="sr-only" for="recovery-code">Current code from your app</label>
+      <input class="input input-code" id="recovery-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Current code" maxlength="7" required>
+      <button class="btn btn-quiet" type="submit">Make new recovery codes</button>
+    </form>
+    <form method="post" action="/settings/security/totp/disable" class="inline-form" data-confirm="Turn off two-step sign-in? Your account becomes easier to break into.">
+      {{ csrf() }}
+      <label class="sr-only" for="disable-code">Current code from your app</label>
+      <input class="input input-code" id="disable-code" type="text" name="code" autocomplete="one-time-code" placeholder="Current code" maxlength="12" required>
+      <button class="btn btn-danger" type="submit">Turn off two-step sign-in</button>
+    </form>
   </div>
-  <form method="post" action="/settings/security/totp/enable" class="inline-form">
+  {% else %}
+  <p>Add a second lock to your account. After you sign in, Secureddy asks for a 6-digit code from an app on your phone, so a stolen password or Google account is not enough.</p>
+  <div class="mfa-setup">
+    <div class="mfa-qr">
+      {{ qr_svg }}
+      <p class="muted small">Scan with your phone</p>
+      <a class="link small mfa-open" href="{{ otpauth_uri }}">On this phone? Open in your app</a>
+    </div>
+    <ol class="steps steps-compact mfa-steps">
+      <li><strong>Install an authenticator app.</strong><span>Microsoft Authenticator, Google Authenticator or Authy, free from the App Store or Google Play.</span></li>
+      <li><strong>Add Secureddy.</strong>
+        <span><b>Microsoft Authenticator:</b> tap <b>+</b> (Add account), choose <b>Other account (Google, Facebook, etc.)</b>, then <b>Scan QR code</b>.</span>
+        <span><b>Google Authenticator:</b> tap <b>+</b>, then <b>Scan a QR code</b>. <b>Authy:</b> tap <b>+</b> (Add account), then <b>Scan QR Code</b>.</span>
+      </li>
+      <li><strong>Can't scan?</strong>
+        <span>Choose "Enter a setup key" (or "Enter code manually") and type this key. Account: {{ user.login_email }}. Type: time based.</span>
+        <span class="key-row"><code class="manual-key" data-copy-text>{{ manual_key }}</code><button class="btn btn-quiet btn-small" type="button" data-copy="{{ manual_key_raw }}" hidden>{{ icon("copy") }}<span>Copy</span></button></span>
+      </li>
+      <li><strong>Enter the 6-digit code your app shows.</strong><span>Then we show you 10 recovery codes to keep in a safe place.</span></li>
+    </ol>
+  </div>
+  <form method="post" action="/settings/security/totp/enable" class="inline-form mfa-confirm">
     {{ csrf() }}
-    <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" maxlength="7" required>
-    <button class="btn btn-primary" type="submit">Turn on 2-step sign-in</button>
+    <label class="sr-only" for="enable-code">6-digit code from your app</label>
+    <input class="input input-code" id="enable-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" placeholder="6-digit code" maxlength="7" required>
+    <button class="btn btn-primary" type="submit">Turn on two-step sign-in</button>
   </form>
   {% endif %}
 </section>
 
-<section class="card">
+<section class="card" id="lock" aria-labelledby="lock-title">
+  <div class="card-head">
+    <h2 id="lock-title">App lock</h2>
+    <span class="chip tone-{{ 'ok' if lock else 'grey' }}"><span>{{ "On" if lock else "Off" }}</span></span>
+  </div>
+  <p class="muted small">You stay signed in until you sign out. The app lock asks for your PIN or passkey when you come back, so someone holding your unlocked phone cannot read your mail.</p>
+
+  {% if lock %}
+  <form method="post" action="/settings/lock/timeout" class="stack">
+    {{ csrf() }}
+    <label class="field"><span>Lock Secureddy</span>
+      <select class="input" name="timeout">
+        {% for key, seconds, label in timeouts %}<option value="{{ key }}"{% if key == lock_timeout %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-quiet btn-small" type="submit">Save</button>
+  </form>
+  <details class="sub-details">
+    <summary>Change {{ "PIN" if lock.kind == "pin" else ("password" if lock.kind == "password" else "lock") }}</summary>
+    <form method="post" action="/settings/lock" class="stack">
+      {{ csrf() }}
+      <input type="hidden" name="timeout" value="{{ lock_timeout }}">
+      {% if lock.secret_hash %}<label class="field"><span>Current {{ "PIN" if lock.kind == "pin" else "password" }}</span><input class="input" type="password" name="current" autocomplete="current-password" required></label>{% endif %}
+      <fieldset class="segmented segmented-sm">
+        <legend class="sr-only">Kind</legend>
+        <label class="seg"><input type="radio" name="kind" value="pin"{% if lock.kind != "password" %} checked{% endif %}><span>6-digit PIN</span></label>
+        <label class="seg"><input type="radio" name="kind" value="password"{% if lock.kind == "password" %} checked{% endif %}><span>Password</span></label>
+        {% if passkeys %}<label class="seg"><input type="radio" name="kind" value="passkey"{% if lock.kind == "passkey" %} checked{% endif %}><span>Passkey only</span></label>{% endif %}
+      </fieldset>
+      <label class="field"><span>New PIN or password</span><input class="input" type="password" name="secret" autocomplete="new-password" inputmode="text"></label>
+      <label class="field"><span>Repeat it</span><input class="input" type="password" name="confirm" autocomplete="new-password"></label>
+      <button class="btn btn-quiet btn-small" type="submit">Save</button>
+      <p class="help">Saving signs out your other devices.</p>
+    </form>
+  </details>
+  <details class="sub-details">
+    <summary>Turn off the app lock</summary>
+    <form method="post" action="/settings/lock/remove" class="stack">
+      {{ csrf() }}
+      {% if lock.secret_hash %}<label class="field"><span>Current {{ "PIN" if lock.kind == "pin" else "password" }}</span><input class="input" type="password" name="current" autocomplete="current-password" required></label>{% endif %}
+      <button class="btn btn-danger btn-small" type="submit">Turn off</button>
+    </form>
+  </details>
+  {% else %}
+  <form method="post" action="/settings/lock" class="stack">
+    {{ csrf() }}
+    <fieldset class="segmented segmented-sm">
+      <legend class="sr-only">Lock with</legend>
+      <label class="seg"><input type="radio" name="kind" value="pin" checked><span>6-digit PIN</span></label>
+      <label class="seg"><input type="radio" name="kind" value="password"><span>Password</span></label>
+      {% if passkeys %}<label class="seg"><input type="radio" name="kind" value="passkey"><span>Passkey only</span></label>{% endif %}
+    </fieldset>
+    <div class="two-fields">
+      <label class="field"><span>PIN or password</span><input class="input" type="password" name="secret" autocomplete="new-password"></label>
+      <label class="field"><span>Repeat it</span><input class="input" type="password" name="confirm" autocomplete="new-password"></label>
+    </div>
+    <label class="field"><span>Lock Secureddy</span>
+      <select class="input" name="timeout">
+        {% for key, seconds, label in timeouts %}<option value="{{ key }}"{% if key == "5m" %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-primary btn-small" type="submit">{{ icon("lock") }}<span>Turn on the app lock</span></button>
+  </form>
+  {% endif %}
+
+  <h3 class="sub-title">Passkeys</h3>
+  <p class="muted small">Unlock with Face ID, Touch ID or Windows Hello instead of typing your PIN.</p>
+  {% if passkeys %}
+  <ul class="row-list" role="list">
+    {% for p in passkeys %}
+    <li class="row-item">
+      <span class="mini-logo">{{ icon("fingerprint", "ico") }}</span>
+      <span class="row-main"><strong>{{ p.name }}</strong><span class="muted small">Added {{ p.created_at | ago }}{% if p.last_used_at %} · used {{ p.last_used_at | ago }}{% endif %}</span></span>
+      <form method="post" action="/settings/passkeys/{{ p.id }}/remove" data-confirm="Remove this passkey?">
+        {{ csrf() }}
+        <button class="btn btn-ghost btn-small" type="submit">Remove</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form method="post" action="/settings/passkeys" class="inline-form" data-passkey-register>
+    {{ csrf() }}
+    <button class="btn btn-quiet btn-small" type="submit">{{ icon("fingerprint") }}<span>Add a passkey</span></button>
+    <span class="muted small" data-passkey-msg role="status"></span>
+  </form>
+</section>
+
+<section class="card" id="devices" aria-labelledby="devices-title">
+  <div class="card-head">
+    <h2 id="devices-title">Devices</h2>
+    {{ icon("phone", "ico ico-title") }}
+  </div>
+  <p class="muted small">Where you are signed in. Sign out any device you do not recognise.</p>
+  <ul class="row-list" role="list">
+    {% for d in devices %}
+    <li class="row-item">
+      <span class="mini-logo">{{ icon(d.user_agent | device_icon, "ico") }}</span>
+      <span class="row-main"><strong>{{ d.user_agent or "Unknown device" }}{% if d.id == this_device %} <span class="chip tone-accent"><span>This device</span></span>{% endif %}</strong><span class="muted small">Active {{ d.last_seen_at | ago }}{% if d.ip_prefix %} · network {{ d.ip_prefix }}{% endif %} · signed in {{ d.created_at | ago }}</span></span>
+      <form method="post" action="/settings/devices/{{ d.handle }}/sign-out"{% if d.id == this_device %} data-confirm="Sign out on this device?"{% endif %}>
+        {{ csrf() }}
+        <button class="btn btn-ghost btn-small" type="submit">Sign out</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  <form method="post" action="/settings/devices/sign-out-everywhere" data-confirm="Sign out on every device, including this one?">
+    {{ csrf() }}
+    <button class="btn btn-danger btn-small" type="submit">{{ icon("logout") }}<span>Sign out everywhere</span></button>
+  </form>
+</section>
+
+<section class="card" id="install" aria-labelledby="install-title">
+  <div class="card-head">
+    <h2 id="install-title">Install on iPhone</h2>
+    {{ icon("download", "ico ico-title") }}
+  </div>
+  <div class="install-grid">
+    <svg class="install-art" viewBox="0 0 220 300" width="220" height="300" role="img" aria-label="An iPhone with Safari open. The Share button at the bottom is highlighted, then Add to Home Screen.">
+      <rect x="20" y="6" width="180" height="288" rx="30" class="ia-body"/>
+      <rect x="30" y="16" width="160" height="268" rx="22" class="ia-screen"/>
+      <rect x="85" y="24" width="50" height="12" rx="6" class="ia-notch"/>
+      <rect x="44" y="48" width="132" height="18" rx="9" class="ia-bar"/>
+      <path class="ia-mark" d="M110 92l20 8v14c0 13-8.5 23-20 28-11.5-5-20-15-20-28v-14z"/>
+      <path class="ia-check" d="M101 118l6.5 6.5 12.5-13"/>
+      <rect x="54" y="160" width="112" height="10" rx="5" class="ia-line"/>
+      <rect x="66" y="178" width="88" height="10" rx="5" class="ia-line"/>
+      <rect x="40" y="246" width="140" height="28" rx="10" class="ia-bar"/>
+      <circle cx="110" cy="260" r="15" class="ia-ring"/>
+      <path class="ia-share" d="M110 252v13M104.5 257.5L110 252l5.5 5.5M103 262v6h14v-6"/>
+      <text x="110" y="232" text-anchor="middle" class="ia-label">1. Tap Share</text>
+    </svg>
+    <ol class="steps steps-compact">
+      <li><strong>Open Secureddy in Safari.</strong><span>Other iPhone browsers cannot install it.</span></li>
+      <li><strong>Tap Share</strong><span>The square with an arrow, at the bottom of the screen.</span></li>
+      <li><strong>Tap "Add to Home Screen", then Add.</strong><span>Secureddy opens like an app, full screen, and you stay signed in.</span></li>
+    </ol>
+  </div>
+</section>
+
+<section class="card" id="password">
   <div class="card-head">
     <h2>Password</h2>
     <span class="chip tone-{{ 'ok' if has_password else 'grey' }}">{{ "Set" if has_password else "Not set" }}</span>
   </div>
-  <p>A password lets you sign in without Google, for example from a Yahoo-only account. Use at least {{ password_min_length }} characters; a short sentence works well.</p>
+  <p>A password lets you sign in without Google, Microsoft or Yahoo. Use at least {{ password_min_length }} characters; a short sentence works well. Changing it signs out your other devices.</p>
   <form method="post" action="/settings/security/password" class="stack">
     {{ csrf() }}
     <label class="field"><span>New password</span><input class="input" type="password" name="password" autocomplete="new-password" minlength="{{ password_min_length }}" required></label>
@@ -66,3 +314,4 @@
   </form>
 </section>
 {% endblock %}
+{% block scripts %}<script src="/static/lock.js?v={{ asset_version }}" defer></script>{% endblock %}

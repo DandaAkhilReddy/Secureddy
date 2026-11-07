@@ -73,7 +73,7 @@ async def column_type(db: Database, table: str, column: str) -> str:
     return row[0] if row[1] is None else f"{row[0]}({row[1]})"
 
 
-async def add_user_and_mailbox(db: Database, *, address: str = "danda@yahoo.com", **kw) -> MailboxRow:
+async def add_user_and_mailbox(db: Database, *, address: str = "client@yahoo.com", **kw) -> MailboxRow:
     async with db.session() as s:
         user = await repo.get_user_by_email(s, "owner@example.com") or await repo.create_user(
             s, email="owner@example.com", display_name="Owner"
@@ -164,10 +164,10 @@ class TestDuplicateMailboxes:
         and one "Setting up" row with one, for the same Yahoo address."""
         await make_old_schema(pg_db)
         old = await add_user_and_mailbox(
-            pg_db, address="Danda.Akhil@yahoo.com", status="disconnected",
+            pg_db, address="Client.Person@yahoo.com", status="disconnected",
             created_at=datetime.now(UTC) - timedelta(days=1),
         )
-        new = await add_user_and_mailbox(pg_db, address="danda.akhil@yahoo.com", cursor="1:5")
+        new = await add_user_and_mailbox(pg_db, address="client.person@yahoo.com", cursor="1:5")
         now = datetime.now(UTC)
         async with pg_db.session() as s:
             s.add(MailboxSecret(mailbox_id=new.id, kind="imap_password", ciphertext="x", key_id="k"))
@@ -197,7 +197,7 @@ class TestDuplicateMailboxes:
         assert {a.mailbox_id for a in audit} == {new.id} and len(audit) == 2
         assert [x.mailbox_id for x in secrets] == [new.id]
         with pytest.raises(IntegrityError):
-            await add_user_and_mailbox(pg_db, address="DANDA.AKHIL@yahoo.com")
+            await add_user_and_mailbox(pg_db, address="CLIENT.PERSON@yahoo.com")
         assert await pg_db.create_all() == []
 
 

@@ -24,6 +24,7 @@ import random
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
@@ -36,8 +37,12 @@ from reddysec.mail.base import (
     LABEL_RELEASED,
     LABEL_SAFE,
     LABEL_SUSPICIOUS,
+    SEARCH_MAX,
     AuthExpired,
     ConnectorError,
+    SearchHit,
+    clean_query,
+    split_from,
 )
 from reddysec.mail.oauth_google import GoogleOAuth, TokenSet
 from reddysec.models import PolicyConfig, ProtectionMode, Provider, RawMessage, Verdict, VerdictLevel
@@ -517,6 +522,74 @@ class GmailConnector:
             return str(payload["emailAddress"]).lower(), str(payload["historyId"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("malformed Pub/Sub push body") from exc
+
+    # ------------------------------------------------- reading and tidying mail
+    async def search(self, query: str, limit: int = 20) -> list[SearchHit]:
+        """Gmail's own search (the ``q`` syntax people use in Gmail). Spam and
+        Trash are left out, as in Gmail. Only headers and the snippet are read."""
+        q = clean_query(query)
+        if not q:
+            return []
+        ids = await self._list_message_ids(query=q, limit=max(1, min(limit, SEARCH_MAX)))
+        semaphore = asyncio.Semaphore(FETCH_CONCURRENCY)
+
+        async def one(message_id: str) -> SearchHit | None:
+            async with semaphore:
+                try:
+                    body = await self._request(
+                        "GET",
+                        f"messages/{message_id}",
+                        params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+                    )
+                except GmailApiError as exc:
+                    if exc.status == 404:
+                        return None
+                    raise
+            headers = {
+                str(h.get("name", "")).lower(): str(h.get("value", ""))
+                for h in (body.get("payload") or {}).get("headers", [])
+                if isinstance(h, dict)
+            }
+            name, address = split_from(headers.get("from"))
+            received = None
+            if str(body.get("internalDate", "")).isdigit():
+                received = datetime.fromtimestamp(int(body["internalDate"]) / 1000, UTC)
+            return SearchHit(
+                provider_message_id=str(body.get("id") or message_id),
+                from_name=name,
+                from_address=address,
+                subject=headers.get("subject", ""),
+                received_at=received,
+                snippet=str(body.get("snippet", ""))[:300],
+                unread="UNREAD" in (body.get("labelIds") or []),
+            )
+
+        hits = await asyncio.gather(*(one(i) for i in ids))
+        return [h for h in hits if h is not None]
+
+    async def archive(self, provider_message_id: str) -> None:
+        await self._modify(provider_message_id, add=[], remove=["INBOX"])
+
+    async def set_read(self, provider_message_id: str, read: bool) -> None:
+        if read:
+            await self._modify(provider_message_id, add=[], remove=["UNREAD"])
+        else:
+            await self._modify(provider_message_id, add=["UNREAD"], remove=[])
+
+    async def trash(self, provider_message_id: str) -> None:
+        """Gmail's Trash (kept 30 days), never a permanent delete."""
+        await self._request("POST", f"messages/{provider_message_id}/trash")
+
+    async def web_link(self, provider_message_id: str) -> str:
+        return f"https://mail.google.com/mail/?authuser={quote(self.address)}#all/{quote(provider_message_id)}"
+
+    async def revoke(self) -> bool:
+        """Google's revoke endpoint ends the whole grant (every token)."""
+        token = self.credentials.refresh_token or self.credentials.access_token
+        if not token:
+            return False
+        await self._oauth.revoke(token)
+        return True
 
     # ------------------------------------------------------------ internals
     async def _modify(self, message_id: str, *, add: Iterable[str], remove: Iterable[str]) -> None:

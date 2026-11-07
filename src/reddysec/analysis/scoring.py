@@ -137,12 +137,29 @@ _REASONS: dict[str, str] = {
     "auth.dkim_fail": "The message's digital signature does not check out",
     "dynamic.unavailable": "We could not open one of its links to check it",
     "policy.blocked_sender": "The sender is on your block list",
+    "dynamic.clickfix": "The link opens a fake 'I'm not a robot' check that tries to make you paste a command into your computer",
+    "dynamic.clipboard_hijack": "The link secretly copies a dangerous command to your clipboard",
+    "dynamic.fake_captcha": "The link opens a fake 'I'm not a robot' check",
+    "dynamic.tech_support_scam": "The link opens a fake virus warning that tells you to call scammers",
+    "dynamic.wallet_drainer": "The link opens a page that tries to empty a crypto wallet",
+    "dynamic.aitm_proxy": "The link opens a copy of the {brand} sign-in page that steals passwords and security codes",
+    "dynamic.free_hosting_login": "The link opens a sign-in page on a free website service",
+    "dynamic.device_code_lure": "The link asks you to type a code that would let someone else into your account",
+    "bec.device_code_lure": "It asks you to type a code that would let someone else into your account",
+    "url.oauth_consent_lure": "A link asks you to give an app access to your email or files",
+    "bec.callback_scam": "It is a fake bill that wants you to call a phone number",
+    "attachment.svg_phish": "The attachment {filename} is an 'image' that opens a fake sign-in page",
+    "attachment.html_clickfix": "The attachment {filename} tries to make you paste a command into your computer",
+    "attachment.filename_trick": "The attachment {filename} hides its real file type",
+    "dynamic.notification_spam": "The link asks to send you notifications, a trick used for fake virus alerts",
+    "dynamic.captcha_gated_login": "The link hides a sign-in page behind a 'verify you are human' check",
 }
 _IGNORED_FOR_SUMMARY = frozenset(
     {"sender.first_seen", "auth.dmarc_none", "auth.dkim_none", "auth.spf_none", "auth.missing", "subject.urgency",
      "header.date_skew", "url.insecure_http", "url.opaque_token_unknown_host", "url.credential_words",
      "url.suspicious_tld", "url.many_subdomains", "dynamic.blocked", "dynamic.many_third_parties",
-     "attachment.html_attachment", "attachment.pdf_external_links", "attachment.empty", "attachment.oversized"}
+     "attachment.html_attachment", "attachment.pdf_external_links", "attachment.empty", "attachment.oversized",
+     "url.free_hosting", "url.open_redirect", "url.hidden_characters", "dynamic.anti_analysis", "dynamic.ua_cloaking"}
 )
 
 
@@ -216,7 +233,7 @@ def summarize(
     opener = ""
     impersonation_codes = {
         "sender.display_brand_impersonation", "sender.domain_lookalike", "url.lookalike", "dynamic.credential_phish",
-        "sender.display_contact_impersonation", "bec.from_lookalike_contact",
+        "sender.display_contact_impersonation", "bec.from_lookalike_contact", "dynamic.aitm_proxy",
     }
     if any(s.code in impersonation_codes for s in meaningful):
         opener = f"This email pretends to be from {who}. "

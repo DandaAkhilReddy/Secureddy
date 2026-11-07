@@ -1,170 +1,172 @@
 # Secureddy
 
-A bodyguard for a private client's inbox. Every email with a link or an
-attachment is opened first inside a disposable, isolated environment. The
-client sees a verdict in plain English, and when they want to open a link
-themselves they open it in the **Reading Room**: a browser that runs on our
-servers and streams only pixels to their device.
+**A bodyguard for your inbox.** Secureddy opens every link and file in your
+email inside a throwaway sandbox before you see it, then tells you in plain
+words whether it is safe. Dangerous mail is moved out of the way. Links you
+still want to see open in a remote browser that only streams pictures to you.
 
-Built for people who use consumer mailboxes (Gmail, Yahoo, iCloud,
-Outlook.com), where enterprise email security products do not reach.
+It is built for people on everyday mailboxes (Gmail, Outlook.com and
+Microsoft 365, Yahoo, iCloud) where company email security does not reach.
+We built it for ourselves and the people close to us first; it is open source
+so you can run it too.
 
-## How it works (one paragraph)
+> Screenshots: add `docs/img/home.png`, `docs/img/accounts.png`,
+> `docs/img/read.png` and `docs/img/ask.png` here.
 
-The client signs in with Google, Microsoft or Yahoo (or adds an IMAP
-mailbox). We ask Gmail or Microsoft Graph for the minimum access needed to
-read, label and move mail; Yahoo Mail connects with an app password. New messages are
-fetched within seconds. Messages without links or attachments are released at
-once. Messages with links or attachments go through static analysis (sender
-authentication, lookalike domains, domain age, attachment type checks, QR
-codes, wire-fraud language) and, when needed, the **detonation chamber**: a
-sandboxed Chromium that follows every redirect, records every request, and
-looks for credential-harvesting forms, brand impersonation and drive-by
-downloads. The result is a score, a verdict (Checked / Suspicious /
-Quarantine) and a short explanation. In **Hold mode** the message does not
-reach the inbox until the verdict exists; a dead man's switch releases
-everything if our pipeline ever stops.
+## What it does
 
-## Repository layout
+- **One account, many mailboxes.** Connect Gmail and Outlook in one click,
+  Yahoo in three short steps. Each mailbox has the same options: open inbox,
+  pause, reconnect, re-check the last 7 days, trusted and blocked senders,
+  sign out of that mailbox. See them together in one list or separately.
+- **Checks before you click.** Sender checks, look-alike domains, QR codes,
+  dangerous attachments, wire-fraud wording, and a real Chromium sandbox that
+  follows every redirect. Every email gets a verdict, Checked or Suspicious,
+  with the reasons; the dangerous ones are also moved out of your inbox (into
+  a Secureddy Quarantine folder in Gmail, Outlook or Yahoo).
+- **Home at a glance.** Two numbers, Checked and Suspicious, for Today, 7
+  days, 1 month or 1 year, with a small chart and how many emails were
+  checked. The choice is remembered and applies to the Email list too.
+- **Read your mail safely.** Open an email inside Secureddy: it is fetched
+  live, cleaned, and shown in a locked-down frame. Remote images stay blocked
+  until you ask. Every link goes through a check page that says "safe to
+  open", "open in the Reading Room" or "do not open".
+- **Search.** Search what we checked, or tick "Search inside emails" to ask
+  Gmail, Outlook or Yahoo too. Archive, mark read, delete (to Trash) and
+  "Reply in Gmail" from the same screen.
+- **Ask Secureddy.** A chat assistant (Claude, Azure AI Foundry or Azure
+  OpenAI) that answers about *your* mail only: "show me the most suspicious
+  emails", "search my Walmart emails", "is this link safe?". Answers stream in
+  with cards you can tap. It can only suggest actions; you confirm them.
+- **Learns from you.** "Not suspicious?", "Not fake?" and "This is fake"
+  teach it which senders to trust, and it still checks everything they send.
+- **Private by design.** Mail bodies are never stored. You stay signed in
+  until you sign out, and you can add an app lock (PIN, password, passkey or
+  authenticator code). Installs on iPhone and Android as an app.
+- **Two-step sign-in.** Turn it on in Settings → Security: scan the QR code
+  with Microsoft Authenticator (Add account → Other account (Google, Facebook,
+  etc.) → Scan QR code), Google Authenticator or Authy, confirm one code, and
+  keep the 10 recovery codes. Every sign-in (Google, Microsoft, Yahoo or
+  password) then asks for the 6-digit code; a device can be remembered for 30
+  days.
+- **Light, dark or match the device**, chosen in Settings and remembered for
+  your account.
 
+## How it fits together
+
+```mermaid
+flowchart LR
+  subgraph Providers
+    G[Gmail API]
+    M[Microsoft Graph]
+    Y[Yahoo / iCloud IMAP]
+  end
+  W[Worker] -->|poll, label, move| Providers
+  W --> A[Analysis engine]
+  A --> C[Sandbox chamber<br/>Chromium, one VM per check]
+  W --> DB[(PostgreSQL<br/>metadata + verdicts only)]
+  Web[Web app + PWA] --> DB
+  Web -->|read live, search, archive| Providers
+  Web --> RR[Reading Room<br/>remote browser]
+  Web --> L[Claude / Foundry<br/>assistant]
+  KV[Key Vault + managed identities] -.-> W & Web
 ```
-src/reddysec/
-  models/     shared data contracts (start here)
-  core/       crypto (token encryption), ids, artifact store, job queue, logging
-  analysis/   parsing, URL + attachment analysis, intel, BEC, policy, scoring, pipeline
-  chamber/    detonation backends (local / docker / Azure ACI), Reading Room (RBI), CDR
-  mail/       Gmail (OAuth + API), Microsoft Graph (Outlook.com / Microsoft 365) and IMAP
-              (Yahoo / iCloud / Outlook.com app passwords) connectors; Google, Microsoft and
-              Yahoo sign-in
-  store/      SQLAlchemy schema (metadata + verdicts only; never bodies)
-  worker/     the processing loop and verdict actions
-  web/        FastAPI app: sign-in, onboarding, dashboard, reports
-tests/
-  unit/ functional/ integration/ fixtures/
-infra/azure/  Bicep for the production deployment
-docker/       images and docker-compose for local full-stack runs
-docs/         runbooks (Google OAuth client setup, Azure deployment, operations)
+
+- `src/reddysec/models` shared data contracts (start here)
+- `src/reddysec/mail` Gmail, Microsoft Graph and IMAP connectors; Google,
+  Microsoft and Yahoo sign-in
+- `src/reddysec/analysis` parsing, URL and attachment analysis, scoring
+- `src/reddysec/chamber` sandbox backends (local, Docker, Azure Container
+  Instances) and the Reading Room
+- `src/reddysec/worker` the processing loop and the dead man's switch
+- `src/reddysec/web` FastAPI app: accounts, reports, reading view, search,
+  sessions and app lock, the PWA
+- `src/reddysec/assistant` "Ask Secureddy": tools, agent loop, model clients
+- `infra/azure` Bicep for Azure Container Apps; `docker/` images and compose
+
+## Quick start (Docker)
+
+```bash
+cp .env.example .env              # fill in at least one sign-in provider
+docker compose -f docker/docker-compose.yml up --build
+open http://localhost:8000
 ```
 
-## Quick start (development)
+For a local run without Docker:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python -m playwright install chromium
-cp .env.example .env            # then fill RS_GOOGLE_CLIENT_ID / SECRET
+cp .env.example .env
 reddysec init-db
-reddysec web                     # http://localhost:8000
-reddysec worker                  # in a second terminal
+reddysec web          # http://localhost:8000
+reddysec worker       # in a second terminal
 ```
 
-Schema upgrades: `reddysec migrate` (also run by `init-db`, by the worker at
-startup and by the web app in dev) creates missing tables, widens columns
-whose models became wider (PostgreSQL), merges duplicate mailboxes and adds
-the one-mailbox-per-address index. It is idempotent and takes a PostgreSQL
-advisory lock, so several processes may run it at once.
+`RS_DEV_LOGIN_ENABLED=true` adds a password-less developer sign-in for local
+testing. It is refused in production.
 
-Run the tests:
+Provider setup: [Google](docs/google-oauth-setup.md),
+[Microsoft, Yahoo, iCloud](docs/yahoo-icloud-outlook-setup.md).
+
+## Self-hosting on Azure
+
+The Bicep templates deploy Container Apps (web, worker, dead man's switch),
+PostgreSQL, Key Vault, Blob Storage and an isolated subnet for sandbox
+checks, all with managed identities and no stored Azure passwords.
+Deployment-specific values (your URL, client ids, resource names) live only in
+`infra/azure/*.bicepparam`. Start with [docs/azure-deploy.md](docs/azure-deploy.md),
+then [docs/claude-keyless-setup.md](docs/claude-keyless-setup.md) to use Claude
+without any API key. Rough costs are in [docs/cost-estimate.md](docs/cost-estimate.md).
+
+## Configuration
+
+All settings are environment variables starting with `RS_` (or a `.env`
+file). The full list with comments is in [.env.example](.env.example); the
+most important ones:
+
+| Setting | What it does |
+|---------|--------------|
+| `RS_ENV` | `dev`, `test`, `staging` or `prod` (prod turns on Secure cookies and HSTS) |
+| `RS_BASE_URL` | The public address, used for OAuth redirects and passkeys |
+| `RS_SECRET_KEY` | Signs the flow cookie, link checks and image links (Key Vault in prod) |
+| `RS_TOKEN_KEK` | 32-byte key that encrypts mailbox tokens and app passwords |
+| `RS_DATABASE_URL` | SQLite for development, PostgreSQL in production |
+| `RS_GOOGLE_CLIENT_ID` / `_SECRET` | Sign in with Google and connect Gmail |
+| `RS_MICROSOFT_CLIENT_ID` / `_CLIENT_CERT` / `_CERT_THUMBPRINT` | Sign in with Microsoft (certificate auth) and connect Outlook |
+| `RS_YAHOO_CLIENT_ID` / `_SECRET` | Sign in with Yahoo (mail connects with an app password) |
+| `RS_SANDBOX_BACKEND` | `local`, `docker` or `aci` |
+| `RS_ASSISTANT_PROVIDER` / `RS_ASSISTANT_MODEL` | `anthropic`, `azure_foundry` or `azure_openai`, and the model |
+| `RS_ANTHROPIC_FEDERATION_RULE_ID`, `_ORGANIZATION_ID`, `_SERVICE_ACCOUNT_ID`, `_WORKSPACE_ID`, `_WIF_AUDIENCE`, `RS_AZURE_IDENTITY_CLIENT_ID` | Keyless Claude via Workload Identity Federation |
+| `RS_ANTHROPIC_API_KEY` | Claude with a static key (fallback; prefer keyless) |
+| `RS_SESSION_IDLE_DAYS` / `RS_SESSION_ABSOLUTE_DAYS` | How long a device stays signed in (90 / 365) |
+| `RS_HOLD_DEAD_MAN_MINUTES` | Hold mode releases everything if checks stop for this long |
+
+## Security
+
+Read [SECURITY.md](SECURITY.md) and [docs/security-model.md](docs/security-model.md).
+Report vulnerabilities privately through the repository's Security tab.
+Secrets are never committed: gitleaks runs in CI and as a pre-commit hook.
+
+## Tests
 
 ```bash
-pytest                           # unit + functional
-pytest -m integration            # real browser detonations and the Reading Room
-pytest -m postgres               # against real PostgreSQL: RS_TEST_POSTGRES_URL, or a local
-                                 # install (initdb); skipped when neither is there
-pytest --cov=reddysec --cov-report=term-missing
+pytest                    # unit + functional
+pytest -m integration     # real Chromium: sandbox, Reading Room, the web app in a browser
+pytest -m postgres        # against a real PostgreSQL
+pytest --cov=reddysec
 ```
 
-See `docs/` for the Google OAuth setup, Azure deployment and the operations
-runbook.
+## Roadmap
 
-## Status (5 Nov 2026)
+- A Windows sandbox for Office and executable files (today they are analysed
+  statically and turned into safe PDFs).
+- A sandbox per Reading Room session.
+- Yahoo Mail over OAuth (needs Yahoo's partner approval; app passwords work now).
+- Sending and replying from inside Secureddy.
+- Native push notifications for quarantined mail.
 
-What runs today, end to end, in this repository:
+## License
 
-- Gmail OAuth sign-in and connector (labels, Hold-mode filter, history
-  polling, Pub/Sub push decoding, quarantine/release, dead man's switch).
-- IMAP connector for Yahoo, iCloud and Outlook.com (app passwords).
-- Full analysis engine: parsing, URL extraction (including QR codes and PDFs),
-  lookalike domains, attachment static analysis (macros, PDF JavaScript,
-  encrypted archives with the password in the body, HTML smuggling), wire-fraud
-  language, triage lanes, scoring, plain-English summaries.
-- Detonation chamber on Chromium with three backends: local process (dev),
-  Docker (hardened container on a dirty network), Azure Container Instances
-  (one hypervisor-isolated container group per detonation).
-- Reading Room: pixel-streamed isolated browser with safe-copy downloads.
-- Sender trust (`analysis/trust.py`): mail Google verified as coming from a
-  mailing-list sender is not accused on wording alone; lookalikes, known-bad
-  sites, credential pages, malware and dangerous files always count.
-- Learning from the client: "This is safe" / "This is fake" on every report,
-  a trusted & blocked senders list per mailbox, and "Check again" /
-  "Re-check last 7 days" to re-label mail with today's rules.
-- Web app: dashboard, reports with sandbox screenshots, mailbox onboarding,
-  concierge queue, audit log, TOTP.
-- "Not suspicious?" / "This is fake" on every flagged email, with a quick-pick
-  reason and optional note (stored in `feedback_reasons`, shown on the report,
-  the audit log and the concierge queue; it never changes the trust math).
-- "Ask Secureddy" (`src/reddysec/assistant/`): an in-app chat that answers
-  questions about the client's own verdicts with read-only tools. It can only
-  *propose* "mark safe / fake / check again"; the client clicks the real
-  button. Switch it on with `RS_ASSISTANT_PROVIDER` (anthropic,
-  azure_foundry, azure_openai; empty follows `RS_LLM_PROVIDER`) and the
-  existing API key settings; optional `RS_ASSISTANT_MODEL`,
-  `RS_ASSISTANT_MAX_TURNS` (6), `RS_ASSISTANT_DAILY_MESSAGE_LIMIT` (200).
-- Azure infrastructure as Bicep (validated), Dockerfiles, CI/CD, runbooks.
-
-## Status (6 Nov 2026): Microsoft, Yahoo, "Not fake", installable app
-
-- **Sign in with Microsoft** (`mail/oauth_microsoft.py`): personal and work
-  accounts, Authorization Code + PKCE, client authentication with a
-  certificate (RFC 7523 client assertion, RS256, `x5t` thumbprint) because the
-  tenant forbids client secrets. ID tokens are checked against Microsoft's
-  published keys, the per-tenant issuer, audience, expiry and nonce. Settings:
-  `RS_MICROSOFT_CLIENT_ID`, `RS_MICROSOFT_CLIENT_CERT` (Key Vault
-  `rs-microsoft-client-cert`), `RS_MICROSOFT_CERT_THUMBPRINT` (Key Vault
-  `rs-microsoft-cert-thumbprint`), `RS_MICROSOFT_AUTHORITY`,
-  `RS_MICROSOFT_REDIRECT_PATH`.
-- **Outlook / Microsoft 365 mail over Graph** (`mail/outlook_graph.py`):
-  folders `Secureddy/Checking` and `Secureddy/Quarantine`, coloured
-  categories for verdicts, delta-query polling, immutable message ids,
-  Retry-After throttling, token rotation persisted to the vault. Hold mode is
-  an inbox rule with no conditions that moves new mail to Checking: **validate
-  it on a real mailbox before offering Hold mode on Microsoft accounts.**
-- **Sign in with Yahoo** (`mail/oauth_yahoo.py`, sign-in only:
-  `RS_YAHOO_CLIENT_ID` / `RS_YAHOO_CLIENT_SECRET`). Yahoo Mail itself connects
-  on a "Connect your Yahoo Mail" page with an app password that is tested with
-  a real IMAP login before it is saved. The XOAUTH2 path is ready for the day
-  Yahoo approves us for its Mail API (see the module docstring).
-- **Accounts and linking** (`user_identities` table): one account per person,
-  any number of mailboxes. A sign-in is matched to an existing account by
-  email only when the provider verified the email (Google; Microsoft work
-  accounts with `xms_edov`; Yahoo's `email_verified`) or a Microsoft work
-  account already linked in the same tenant. Otherwise: "Already have an
-  account? Sign in first, then connect this mailbox." "Connect another
-  mailbox" on the Mailboxes page links by the signed-in session (POST + CSRF,
-  checked again in the signed state), never by email.
-- **"Not fake?"** on quarantined email (reasons: I know this sender, I was
-  expecting this, It's from a company I use, Other). **Trust never skips the
-  checks**: a sender the client trusts still has its links opened in the
-  sandbox. A clean result reads "Confirmed again"; anything serious reads
-  "This sender is on your trusted list, but this email looks different" and
-  sends a notification. `Verdict.trust_check` carries the outcome; the
-  Mailboxes page shows the reason, the date and "last confirmed · N emails
-  checked since" (`sender_trust_stats`).
-- **Installable web app**: manifest, service worker (shell only; pages are
-  network-first and never cached; private paths never touched), offline
-  page, install button (Chromium) and a one-time iOS hint. Bottom tab bar and
-  action sheet on phones, sidebar on laptops, warm light theme
-  (`prefers-color-scheme` or Settings).
-
-Test suite: 1,944 tests (1,911 unit and functional, 33 browser integration,
-including an end-to-end scenario that pushes a phishing email through the
-real parser, analyzer and Chromium sandbox into quarantine and the
-dashboard). Coverage 95.9% (line + branch, both suites).
-
-Not built yet, on purpose: a Windows chamber for Office/executable
-detonation (attachments are analysed statically and flattened to safe PDFs
-instead), per-session sandbox pods for the Reading Room (v1 runs sessions in
-the web process), and Yahoo Mail OAuth (needs Yahoo's partner approval; app
-passwords work now). The Gmail Hold-mode filter and the Microsoft Hold-mode
-inbox rule must be validated against real mailboxes before anyone relies on
-them.
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE).

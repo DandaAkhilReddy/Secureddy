@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chip, csrf, icon with context %}
+{% block title %}Before you open this link · Secureddy{% endblock %}
+{% block content %}
+<section class="go-panel go-{{ copy.tone }}" aria-labelledby="go-title">
+  <div class="go-icon" aria-hidden="true">{{ icon("check" if advice == "safe_to_open" else ("x" if advice == "do_not_open" else "eye"), "ico ico-xl") }}</div>
+  <p class="eyebrow">A link in an email from {{ message.from_name or message.from_address or "an unknown sender" }}</p>
+  <h1 id="go-title">{{ copy.title }}</h1>
+  <p class="lede">{{ copy.text }}{% if reason %} {{ reason }}{% endif %}</p>
+
+  <div class="go-url">
+    <span class="muted small">This link goes to</span>
+    <strong class="go-host">{{ host or "an address we cannot read" }}</strong>
+    <code class="url-text">{{ url }}</code>
+    {% if final_url %}<span class="muted small">and ends up at <code class="url-text">{{ final_url }}</code></span>{% endif %}
+    {% if checked %}<span>{{ chip(link_chip) }}</span>{% else %}<span class="muted small">We did not open this exact link in our sandbox.</span>{% endif %}
+  </div>
+  {% if downloads %}<p class="note">{{ downloads }}</p>{% endif %}
+
+  <div class="go-actions">
+    {% if advice == "safe_to_open" and scheme_ok %}
+    <a class="btn btn-primary" href="{{ url }}" rel="noopener noreferrer nofollow" referrerpolicy="no-referrer">{{ icon("external") }}<span>Open link</span></a>
+    {% endif %}
+    {% if advice != "do_not_open" %}
+      {% if room_enabled %}
+      <form method="post" action="/room/start">
+        {{ csrf() }}
+        <input type="hidden" name="url" value="{{ url }}">
+        <input type="hidden" name="message_id" value="{{ message.id }}">
+        <button class="btn {{ 'btn-quiet' if advice == 'safe_to_open' else 'btn-primary' }}" type="submit">{{ icon("shield-check") }}<span>Open in Reading Room</span></button>
+      </form>
+      {% else %}
+      <p class="muted small">The Reading Room is not switched on for this server, so we cannot open this link safely for you.</p>
+      {% endif %}
+    {% endif %}
+    <a class="btn btn-ghost" href="/messages/{{ message.id }}">Back to the email</a>
+  </div>
+
+  {% if advice == "do_not_open" %}
+  <details class="go-risk">
+    <summary>I understand the risk</summary>
+    <p>Opening it on your device could steal your password or install something harmful. If you must see it, the Reading Room opens it on our servers and shows you only a picture.</p>
+    {% if room_enabled %}
+    <form method="post" action="/room/start" data-confirm="We think this link is dangerous. Open it in the Reading Room anyway?">
+      {{ csrf() }}
+      <input type="hidden" name="url" value="{{ url }}">
+      <input type="hidden" name="message_id" value="{{ message.id }}">
+      <button class="btn btn-danger" type="submit">Open in Reading Room anyway</button>
+    </form>
+    {% endif %}
+  </details>
+  {% endif %}
+</section>
+{% endblock %}

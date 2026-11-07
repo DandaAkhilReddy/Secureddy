@@ -51,9 +51,13 @@ DANGEROUS_EXTENSIONS: dict[str, int] = {
     "js": 65, "jse": 75, "wsf": 75, "wsh": 75, "hta": 75, "msi": 70, "msp": 70, "lnk": 75, "iso": 70,
     "img": 70, "vhd": 70, "vhdx": 70, "chm": 70, "one": 75, "jar": 65, "reg": 60, "scf": 70, "url": 60,
     "inf": 60, "dll": 70, "cpl": 70, "msc": 65, "ocx": 70, "xll": 70, "wsc": 70, "sct": 70, "vb": 70,
-    "vba": 70, "bas": 60, "pub": 55, "appx": 55, "msix": 55, "apk": 55, "app": 60, "ade": 60, "adp": 60,
+    "vba": 70, "bas": 60, "pub": 55, "appx": 65, "msix": 65, "apk": 55, "app": 60, "ade": 60, "adp": 60,
     "mde": 60, "accde": 60, "py": 45, "sh": 45, "dmg": 45, "pkg": 45, "deb": 45, "rpm": 45, "ps1xml": 60,
     "psm1": 60, "diagcab": 65, "settingcontent-ms": 75, "library-ms": 70, "search-ms": 70, "wim": 55,
+    # App Installer / MSIX (Storm-1113), Windows Search connectors and other
+    # "opens something else" formats seen in 2023-2026 campaigns.
+    "appinstaller": 70, "searchconnector-ms": 70, "msixbundle": 65, "appxbundle": 65, "application": 65,
+    "iqy": 60, "slk": 55, "website": 60, "xbap": 60, "jnlp": 55, "mam": 60, "theme": 55, "themepack": 55,
 }
 ARCHIVE_EXTENSIONS: frozenset[str] = frozenset({"zip", "7z", "rar", "gz", "tgz", "bz2", "xz", "tar", "cab", "arj", "ace", "z"})
 DOCUMENT_LIKE_EXTENSIONS: frozenset[str] = frozenset(
@@ -125,6 +129,12 @@ _MSI_CLSID_PREFIX = "000c108"
 _HTML_MARKERS = ("<!doctype html", "<html", "<head", "<body", "<script", "<iframe", "<meta ", "<form", "<title")
 
 _BIDI_CONTROL_RE = re.compile("[‪-‮⁦-⁩‎‏]")
+_ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
+# Characters that look like a full stop: "Invoice.pdf\u2024exe" reads as
+# "Invoice.pdf.exe" to the eye but the real extension is the whole tail.
+_LOOKALIKE_DOT_RE = re.compile("[\u2024\uff0e\u3002\u2027\u0701\u0702\ua4f8\u00b7\u2219\u2e31]")
+# "Invoice.pdf                       .exe": spaces push the real extension out of view.
+_PADDING_RE = re.compile(r"\.[A-Za-z0-9]{2,5}\s{6,}")
 _PASSWORD_RE = re.compile(
     r"(?<![a-z])(?:password|passcode|passphrase|pass|pwd|pw|pin|unlock code|access code|code|key)(?![a-z])"
     r"\s*(?:(?:is|are|will be|=|:|-|–|would be)\s*){0,3}"
@@ -306,18 +316,46 @@ class _Context:
 # --------------------------------------------------------------------------- detectors
 
 
+def filename_tricks(filename: str) -> list[str]:
+    """Unicode and spacing tricks that disguise a file's real type."""
+    tricks: list[str] = []
+    if _BIDI_CONTROL_RE.search(filename):
+        tricks.append("right-to-left override")
+    if _ZERO_WIDTH_RE.search(filename):
+        tricks.append("zero-width characters")
+    if _LOOKALIKE_DOT_RE.search(filename):
+        tricks.append("look-alike dot")
+    if _PADDING_RE.search(filename):
+        tricks.append("space padding")
+    return tricks
+
+
+def clean_filename(filename: str) -> str:
+    """``filename`` as the operating system sees its type: invisible characters
+    removed, look-alike dots turned into real ones."""
+    cleaned = _ZERO_WIDTH_RE.sub("", _BIDI_CONTROL_RE.sub("", filename))
+    return _LOOKALIKE_DOT_RE.sub(".", cleaned)
+
+
 def _filename_signals(filename: str, declared_ext: str) -> list[Signal]:
     signals: list[Signal] = []
-    if _BIDI_CONTROL_RE.search(filename):
+    tricks = filename_tricks(filename)
+    if tricks:
+        detail = {
+            "right-to-left override": "Right-to-left override characters make 'exe' read as 'pdf'.",
+            "zero-width characters": "Invisible characters hide the real name from filters.",
+            "look-alike dot": "A character that looks like a dot hides the real file type.",
+            "space padding": "Long runs of spaces push the real file type out of view.",
+        }[tricks[0]]
         signals.append(
             make_signal(
                 "attachment.filename_trick", SignalStage.STATIC, 50,
                 "Attachment name uses hidden characters to disguise its type",
-                "Right-to-left override characters make 'exe' read as 'pdf'.", filename=filename,
+                detail, filename=filename, tricks=tricks,
             )
         )
-    parts = _ext_parts(filename)
-    final = (declared_ext or (parts[-1] if parts else "")).lower()
+    parts = _ext_parts(clean_filename(filename))
+    final = ((parts[-1] if parts else "") if tricks else (declared_ext or (parts[-1] if parts else ""))).lower()
     if final in DANGEROUS_EXTENSIONS:
         signals.append(
             make_signal(
@@ -787,13 +825,17 @@ def _html_signals(filename: str, text: str) -> list[Signal]:
                 "A sign-in page delivered as an attachment bypasses web filters.", filename=filename,
             )
         )
+    hidden_redirect = redirect and (has_atob or has_blob or "data:text/html" in lower or "fromcharcode" in lower)
     if redirect:
         signals.append(
             make_signal(
-                "attachment.html_redirect", SignalStage.STATIC, 30,
-                f"Attachment {_short(filename)} redirects to another website when opened", filename=filename,
+                "attachment.html_redirect", SignalStage.STATIC, 50 if hidden_redirect else 30,
+                f"Attachment {_short(filename)} " + ("secretly forwards you to a hidden website when opened" if hidden_redirect
+                                                    else "redirects to another website when opened"),
+                filename=filename, hidden=hidden_redirect,
             )
         )
+    signals.extend(_html_clickfix_signals(filename, text))
     if obfuscated and not smuggling_weight:
         signals.append(
             make_signal(
@@ -811,17 +853,70 @@ def _html_signals(filename: str, text: str) -> list[Signal]:
     return signals
 
 
+_SVG_REDIRECT_RE = re.compile(
+    r"(?:window\.|document\.|top\.|self\.)?location(?:\.href)?\s*=|location\.(?:replace|assign)\s*\(|window\.open\s*\(|"
+    r"http-equiv\s*=\s*[\"']?refresh",
+    re.IGNORECASE,
+)
+_SVG_DECODE_RE = re.compile(r"\batob\s*\(|fromcharcode|unescape\s*\(|\beval\s*\(|new\s+function\s*\(", re.IGNORECASE)
+
+
+def _html_clickfix_signals(filename: str, text: str) -> list[Signal]:
+    """A ClickFix page delivered as an HTML attachment (Microsoft and Proofpoint
+    saw this from 2024): clipboard code plus "Win + R, Ctrl + V" steps."""
+    from reddysec.chamber import lures as page_lures
+
+    lower = text.lower()
+    copies = "navigator.clipboard" in lower or "execcommand(" in lower or "clipboarddata" in lower
+    visible = re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", text, flags=re.I | re.S)
+    visible = re.sub(r"<[^>]+>", "\n", visible)
+    hits = page_lures.instruction_hits(visible)
+    if not (copies and page_lures.clickfix_instructions(hits)):
+        return []
+    commands = [line for line in text.splitlines() if page_lures.is_dangerous_command(line)]
+    return [
+        make_signal(
+            "attachment.html_clickfix", SignalStage.STATIC, 90 if commands else 70,
+            f"Attachment {_short(filename)} is a fake check that makes you paste a command into Windows",
+            "It copies a command and tells you to press keys to run it. That would install malware.",
+            filename=filename, steps=hits[:10], command_seen=bool(commands),
+        )
+    ]
+
+
 def _svg_signals(filename: str, text: str) -> list[Signal]:
+    """SVG is an image format that is also a web page: it can run script,
+    embed HTML forms (``<foreignObject>``) and redirect. In 2025 SVG
+    attachments became a top phishing carrier (docs/threat-catalog.md)."""
     signals: list[Signal] = []
     lower = text.lower()
-    if "<script" in lower or re.search(r"\son[a-z]+\s*=", lower) or "javascript:" in lower:
+    scripted = "<script" in lower or re.search(r"\son[a-z]+\s*=", lower) is not None or "javascript:" in lower
+    foreign = "<foreignobject" in lower
+    form = foreign and re.search(r"<form|<input|<iframe|type\s*=\s*[\"']?password", lower) is not None
+    redirect = _SVG_REDIRECT_RE.search(text) is not None
+    data_url = re.search(r"(?:href|src)\s*=\s*[\"']?data:text/html", lower) is not None
+    decoded = _SVG_DECODE_RE.search(text) is not None or bool(_BASE64_BLOB_RE.search(text))
+    indicators = [name for name, hit in (
+        ("script", scripted), ("embedded HTML form", form), ("redirect", redirect),
+        ("data: page", data_url), ("decoded/obfuscated script", decoded and scripted),
+    ) if hit]
+    if form or data_url or (scripted and (redirect or decoded)):
+        signals.append(
+            make_signal(
+                "attachment.svg_phish", SignalStage.STATIC, 70,
+                f"Attachment {_short(filename)} is an 'image' that opens a web page or sign-in form",
+                "Opening it in a browser would run code, show a fake sign-in form or send you to a phishing site.",
+                filename=filename, indicators=indicators,
+            )
+        )
+    elif scripted:
         signals.append(
             make_signal(
                 "attachment.svg_script", SignalStage.STATIC, 55,
                 f"Attachment {_short(filename)} is an image file that contains script", filename=filename,
             )
         )
-    elif "<foreignobject" in lower or re.search(r"href\s*=\s*[\"']https?://", lower):
+    elif foreign or re.search(r"href\s*=\s*[\"']https?://", lower):
         signals.append(
             make_signal(
                 "attachment.svg_external", SignalStage.STATIC, 20,

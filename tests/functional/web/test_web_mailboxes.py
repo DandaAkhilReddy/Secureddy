@@ -40,18 +40,20 @@ async def test_mailboxes_page_renders_chips_and_explanations(client, seed, login
     login(client, "boxes@example.com")
     page = client.get("/mailboxes")
     assert page.status_code == 200
-    for label in ("Protected", "Paused", "Needs attention", "Disconnected", "Hold", "Scan"):
+    for label in ("Protected", "Paused", "Needs reconnect", "Signed out", "Hold", "Scan"):
         assert label in page.text
-    assert "Password rejected" in page.text
+    assert "Password rejected" in page.text  # the raw error, under "Details"
+    assert "no longer accepts the password we have" in page.text  # in plain words first
     assert "safety switch releases everything within 10 minutes" in page.text
-    assert "Resume protection" in page.text and "Pause protection" in page.text
+    assert ">Resume<" in page.text and ">Pause<" in page.text and ">Reconnect<" in page.text
+    assert "Open inbox" in page.text and "Sign out of this mailbox" in page.text and "Re-check last 7 days" in page.text
     assert "Yahoo Mail" in page.text and "iCloud Mail" in page.text and "Outlook.com" in page.text
 
 
 async def test_mailboxes_empty_state(client, login):
     login(client, "nobox@example.com")
     page = client.get("/mailboxes")
-    assert "No mailbox yet" in page.text and "Connect Gmail" in page.text
+    assert "No account yet" in page.text and "Connect Gmail" in page.text
 
 
 async def test_add_imap_page_shows_instructions(client, login):
@@ -209,11 +211,13 @@ async def test_pause_resume_disconnect(client, seed, db, login, csrf_of):
     assert row.status == "disconnected"
     async with db.session() as s:
         assert await s.get(MailboxSecret, mailbox.id) is None
-    assert "password or token has been deleted" in client.get("/mailboxes").text
+    assert "Signed out of" in client.get("/mailboxes").text
     client.post(f"/mailboxes/{mailbox.id}/disconnect", data={"csrf_token": token})  # idempotent
-    assert await _actions(db, mailbox.id) == ["mailbox_paused", "mailbox_resumed", "mailbox_disconnected"]
+    assert await _actions(db, mailbox.id) == [
+        "mailbox_paused", "mailbox_resumed", "mailbox_disconnected", "mailbox_signed_out"
+    ]
     page = client.get("/mailboxes")
-    assert "Disconnected" in page.text and f"/mailboxes/{mailbox.id}/mode" not in page.text
+    assert "Signed out" in page.text and f"/mailboxes/{mailbox.id}/mode" not in page.text
 
 
 async def test_resume_from_error_state(client, seed, db, login, csrf_of):
@@ -262,8 +266,9 @@ async def test_mailbox_card_shows_the_workers_plain_error(client, seed, login):
     page = client.get("/mailboxes").text
     assert "We couldn&#39;t save our place in your mailbox. We&#39;re fixing it." in page
     assert "We hit a problem with this mailbox: We couldn" not in page
-    assert "Setting up" not in page and "Needs attention" in page
-    assert "We hit a problem with this mailbox: mailbox credentials expired or revoked" in page
+    assert "Setting up" not in page and ">Error<" in page and "Needs reconnect" in page
+    assert "Google stopped letting us read this mailbox" in page  # plain words for a revoked grant
+    assert "mailbox credentials expired or revoked" in page  # the worker's words, under "Details"
 
 
 async def test_add_imap_rejects_an_overlong_address(client, seed, login, csrf_of):

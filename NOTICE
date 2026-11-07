@@ -1,0 +1,8 @@
+Secureddy
+Copyright 2026 Akhil Reddy Danda and the Secureddy contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It uses third-party open-source software, each under its own license,
+including FastAPI, Starlette, SQLAlchemy, Pydantic, httpx, Jinja2, nh3
+(ammonia), py_webauthn, argon2-cffi, cryptography, Playwright and Chromium.

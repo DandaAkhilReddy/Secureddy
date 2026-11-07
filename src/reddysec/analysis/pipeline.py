@@ -56,12 +56,14 @@ from reddysec.models import (
 
 from .attachments import attachment_signals
 from .bec import LlmAssessment, LlmAssessor, bec_signals, llm_signal
+from .click_advice import advise, links_summary
 from .common import make_signal
 from .domains import brands_mentioned
 from .dynamic import dynamic_signals, file_dynamic_signals, static_risk, url_static_signals
 from .headers import sender_signals
 from .intel import IntelClient
 from .policy import choose_lane, select_attachments_to_detonate, select_urls_to_detonate, sender_is_blocked
+from .redirects import unwrap_chain
 from .scoring import attachment_verdict, combine, dedupe_by_code, summarize, url_verdict
 from .trust import (
     SenderTrust,
@@ -378,6 +380,7 @@ async def _finish(
             any_unknown = True
             if static_risk(url_static.get(url.normalized, [])) >= RISKY_STATIC_THRESHOLD:
                 risky_unknown = True
+        _add_click_advice(verdict, url, det, trust, bec)
         url_verdicts.append(verdict)
 
     att_verdicts: list[AttachmentVerdict] = []
@@ -446,7 +449,10 @@ async def _finish(
         detonated=sum(1 for v in url_verdicts if v.detonated),
         unknown=any_unknown,
     )
+    links_line, link_counts = links_summary(url_verdicts)
     return Verdict(
+        links_summary=links_line,
+        link_advice_counts=link_counts,
         level=level,
         score=score,
         summary=summary,
@@ -465,6 +471,32 @@ async def _finish(
 
 
 REASON_IN_SUMMARY_MAX = 120
+MAX_CHAIN_SHOWN = 10
+
+
+def _add_click_advice(
+    verdict: UrlVerdict, url: ExtractedUrl, det: _Detonated | None, trust: SenderTrust | None, message_signals: list[Signal]
+) -> None:
+    """Fill the per-link "is it safe to click?" fields (analysis.click_advice). Never raises."""
+    try:
+        result = det.result if det is not None else None
+        advice, reason, downloads = advise(
+            verdict, result, detonated=det is not None and not det.failed,
+            verified_domain=trust.aligned_domain if trust is not None else "",
+            message_signals=[s for s in message_signals if s.code == "bec.device_code_lure"],
+        )
+        verdict.click_advice = advice  # type: ignore[assignment]
+        verdict.click_advice_reason = reason
+        verdict.downloads_summary = downloads
+        chain = [h.url for h in unwrap_chain(url.raw)] if url.raw and url.raw != url.normalized else []
+        if result is not None:
+            for hop in result.redirects:
+                if not chain or hop.url.split("#", 1)[0] != chain[-1].split("#", 1)[0]:
+                    chain.append(hop.url)
+        if len(chain) > 1:
+            verdict.redirect_chain = [c[:500] for c in chain[:MAX_CHAIN_SHOWN]]
+    except Exception as exc:  # advice is a convenience; it must never cost a verdict
+        log.warning("click_advice_failed", url=url.normalized, error=str(exc))
 
 
 def trust_check_for(

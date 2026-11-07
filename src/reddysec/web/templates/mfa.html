@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf, icon, brand_mark with context %}
+{% block title %}Two-step sign-in · Secureddy{% endblock %}
+{% block body_class %}page-signin{% endblock %}
+{% block content %}
+<section class="signin mfa" aria-labelledby="mfa-title">
+  <div class="signin-mark">{{ brand_mark("signin-shield") }}</div>
+  <h1 class="lock-title" id="mfa-title">Enter your code</h1>
+  <p class="muted mfa-lede">Open your authenticator app (Microsoft Authenticator, Google Authenticator or Authy) and type the 6-digit code for <strong>Secureddy</strong> · {{ mfa_user.login_email }}.</p>
+
+  {% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+
+  <form method="post" action="/auth/mfa" class="stack signin-form" autocomplete="off">
+    {{ csrf() }}
+    <label class="field">
+      <span>6-digit code</span>
+      <input class="input input-code mfa-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" placeholder="123 456" required autofocus>
+    </label>
+    <label class="check"><input type="checkbox" name="remember" value="1"><span>Remember this device for {{ remember_days }} days</span></label>
+    <button class="btn btn-primary btn-block" type="submit">Continue</button>
+  </form>
+
+  <details class="signin-other">
+    <summary>Lost your phone? Use a recovery code</summary>
+    <form method="post" action="/auth/mfa" class="stack signin-form" autocomplete="off">
+      {{ csrf() }}
+      <label class="field">
+        <span>Recovery code</span>
+        <input class="input input-code" type="text" name="code" autocapitalize="off" spellcheck="false" placeholder="abcde-fghjk" maxlength="20" required>
+      </label>
+      <p class="help">Each recovery code works once. You saved them when you turned on two-step sign-in.</p>
+      <button class="btn btn-quiet btn-block" type="submit">Use recovery code</button>
+    </form>
+  </details>
+
+  <form method="post" action="/auth/mfa/cancel" class="mfa-cancel">
+    {{ csrf() }}
+    <button class="btn btn-ghost btn-small" type="submit">Cancel and sign in another way</button>
+  </form>
+</section>
+{% endblock %}

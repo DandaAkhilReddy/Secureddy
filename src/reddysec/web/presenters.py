@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from pydantic import ValidationError
 
@@ -48,7 +49,9 @@ class Chip:
 LEVEL_CHIPS: dict[str, Chip] = {
     "safe": Chip("Checked", "ok"),
     "suspicious": Chip("Suspicious", "warn"),
-    "malicious": Chip("Quarantine", "bad"),
+    # Clients see two words: Checked and Suspicious. A dangerous email is
+    # Suspicious in red, and a "Moved out of inbox" chip says where it went.
+    "malicious": Chip("Suspicious", "bad"),
     "unknown": Chip("Could not check", "grey"),
 }
 CHECKING = Chip("Checking", "grey")
@@ -69,6 +72,19 @@ def level_chip(level: str | None) -> Chip:
     return LEVEL_CHIPS.get(level or "unknown", LEVEL_CHIPS["unknown"])
 
 
+MOVED_CHIP = Chip("Moved out of inbox", "grey")
+# Staff (concierge) still need the engine's three levels told apart.
+STAFF_LEVEL_LABELS = {"safe": "Checked", "suspicious": "Suspicious", "malicious": "Dangerous", "unknown": "Could not check"}
+
+
+def moved_chip(message: MessageRow) -> Chip | None:
+    """Shown next to the verdict when we moved the email out of the inbox
+    (into the Secureddy Quarantine folder or label in the mailbox)."""
+    if message.quarantined and message.state != STATE_RESTORE_REQUESTED:
+        return MOVED_CHIP
+    return None
+
+
 MAILBOX_STATUS_CHIPS: dict[str, Chip] = {
     "active": Chip("Protected", "ok"),
     "paused": Chip("Paused", "grey"),
@@ -81,6 +97,60 @@ def mailbox_status_chip(mailbox: MailboxRow) -> Chip:
     if mailbox.status == "active" and not mailbox.labels:
         return Chip("Setting up", "accent")
     return MAILBOX_STATUS_CHIPS.get(mailbox.status, Chip(mailbox.status.title(), "grey"))
+
+
+@dataclass(frozen=True)
+class AccountStatus:
+    """What an account card says about a mailbox: a chip and, when something
+    is wrong, one plain sentence and the main action."""
+
+    chip: Chip
+    problem: str = ""
+    needs_reconnect: bool = False
+
+
+RECONNECT_TEXT = {
+    "gmail": "Google stopped letting us read this mailbox (the access was removed or expired). Reconnect to keep it protected.",
+    "microsoft": "Microsoft stopped letting us read this mailbox (the access was removed or expired). Reconnect to keep it protected.",
+    "yahoo": "Yahoo no longer accepts the app password we have. Make a new app password and reconnect.",
+}
+
+
+def account_status(mailbox: MailboxRow) -> AccountStatus:
+    from reddysec.models.accounts import MAILBOX_RETRYING_ERRORS
+
+    if mailbox.status == "disconnected":
+        return AccountStatus(Chip("Signed out", "grey"))
+    if mailbox.status == "paused":
+        return AccountStatus(Chip("Paused", "grey"), "Protection is paused. New email is not being checked.")
+    if mailbox.status == "error":
+        if mailbox.last_error in MAILBOX_RETRYING_ERRORS:
+            return AccountStatus(Chip("Error", "warn"), str(mailbox.last_error))
+        text = RECONNECT_TEXT.get(
+            mailbox.provider,
+            "The mail provider no longer accepts the password we have. Reconnect to keep this mailbox protected.",
+        )
+        return AccountStatus(Chip("Needs reconnect", "bad"), text, needs_reconnect=True)
+    if not mailbox.labels:
+        return AccountStatus(Chip("Setting up", "accent"))
+    if mailbox.last_error in MAILBOX_RETRYING_ERRORS:
+        return AccountStatus(Chip("Protected", "ok"), str(mailbox.last_error))
+    return AccountStatus(Chip("Protected", "ok"))
+
+
+SIGN_OUT_HELP = {
+    "gmail": "We asked Google to cancel our access and deleted our copy of it.",
+    "microsoft": (
+        "We deleted our access. To remove Secureddy from your Microsoft account too, open "
+        "account.live.com/consent/Manage (personal) or myapps.microsoft.com (work or school)."
+    ),
+    "yahoo": "We deleted our copy of the app password. Please also delete that app password in Yahoo: "
+             "Account security, then App passwords.",
+}
+SIGN_OUT_HELP_DEFAULT = (
+    "We deleted our copy of the password. If you made an app password for Secureddy, delete it in your "
+    "mail provider's settings too."
+)
 
 
 def mode_chip(mailbox: MailboxRow) -> Chip:
@@ -128,7 +198,7 @@ def lane_short(lane: str | None) -> str:
 
 STATE_NOTES = {
     STATE_RESTORE_REQUESTED: "You asked for this email back. It returns to your inbox within a minute.",
-    "quarantine_requested": "You marked this email as fake. We are moving it to Quarantine now.",
+    "quarantine_requested": "You marked this email as fake. We are moving it out of your inbox now.",
     "relabel_safe_requested": "You marked this email as safe. Its label changes to Checked within a minute.",
     "rescore_requested": "We are checking this email again with our latest rules. Refresh in a minute.",
     STATE_REVIEWED: "One of our analysts has looked at this email.",
@@ -253,11 +323,9 @@ class Hero:
 def hero(counts: WeeklyCounts, *, has_mailboxes: bool) -> Hero:
     if not has_mailboxes:
         return Hero("Let's get your inbox protected", "grey")
-    need = counts.suspicious + counts.quarantined
-    if counts.quarantined and need:
-        return Hero(f"{_n(need, 'email')} need{'s' if need == 1 else ''} a look", "bad")
+    need = counts.suspicious
     if need:
-        return Hero(f"{_n(need, 'email')} need{'s' if need == 1 else ''} a look", "warn")
+        return Hero(f"{_n(need, 'email')} need{'s' if need == 1 else ''} a look", "bad" if counts.quarantined else "warn")
     return Hero("Your inbox is safe", "ok")
 
 
@@ -275,44 +343,61 @@ class Sparkline:
     height: int
 
 
+SPARK_SPAN = {"hour": "Today, by hour", "day": "Last {n} days", "month": "Last {n} months"}
+SPARK_TICK = {"hour": "%H:00", "day": "%a %d", "month": "%b"}
+
+
 def sparkline(values: tuple[int, ...] | list[int], days: tuple[datetime, ...] = (), *,
-              width: int = 112, height: int = 32, pad: int = 3) -> Sparkline:
+              width: int = 112, height: int = 32, pad: int = 3, unit: str = "day") -> Sparkline:
     vals = list(values) or [0]
     top = max(vals) or 1
     step = (width - 2 * pad) / max(1, len(vals) - 1)
     coords = [(pad + i * step, height - pad - (v / top) * (height - 2 * pad)) for i, v in enumerate(vals)]
+    if len(coords) == 1:  # one bucket (just after midnight): a flat line, not a dot
+        coords = [(pad, coords[0][1]), (width - pad, coords[0][1])]
     pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     area = f"M{coords[0][0]:.1f},{height - pad} L" + " L".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     area += f" L{coords[-1][0]:.1f},{height - pad} Z"
+    tick = SPARK_TICK.get(unit, "%a")
     if days and len(days) == len(vals):
-        detail = ", ".join(f"{d:%a} {v}" for d, v in zip(days, vals, strict=True))
+        detail = ", ".join(f"{d.strftime(tick)} {v}" for d, v in zip(days, vals, strict=True))
     else:
         detail = ", ".join(str(v) for v in vals)
-    return Sparkline(pts, area, f"{coords[-1][0]:.1f}", f"{coords[-1][1]:.1f}",
-                     f"Last {len(vals)} days: {detail}", width, height)
+    span = SPARK_SPAN.get(unit, SPARK_SPAN["day"]).format(n=len(vals))
+    return Sparkline(pts, area, f"{coords[-1][0]:.1f}", f"{coords[-1][1]:.1f}", f"{span}: {detail}", width, height)
 
 
 def _n(count: int, noun: str) -> str:
     return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
-def weekly_sentence(counts: WeeklyCounts, *, has_mailboxes: bool) -> str:
+# How each period reads in a sentence ("We checked 120 emails this month.").
+PERIOD_PHRASES = {"today": "today", "7d": "this week", "1m": "this month", "1y": "this year"}
+PERIOD_SHORT = {"today": "today", "7d": "7 days", "1m": "1 month", "1y": "1 year"}
+
+
+def weekly_sentence(counts: WeeklyCounts, *, has_mailboxes: bool, period: str = "7d") -> str:
     """The first sentence on the dashboard. It must be true, short, and calm."""
+    when = PERIOD_PHRASES.get(period, PERIOD_PHRASES["7d"])
     if not has_mailboxes:
         return "Connect a mailbox and we start checking your email within a minute."
     if counts.checked == 0:
-        return "We have not seen any new email this week. Everything is quiet."
-    parts = [f"We checked {_n(counts.checked, 'email')} this week."]
-    if counts.quarantined:
-        verb = "was" if counts.quarantined == 1 else "were"
-        where = "is" if counts.quarantined == 1 else "are"
-        parts.append(f"{counts.quarantined} {verb} dangerous and {where} in Quarantine.")
+        return f"We have not seen any new email {when}. Everything is quiet."
+    parts = [f"We checked {_n(counts.checked, 'email')} {when}."]
     if counts.suspicious:
-        pronoun = "it" if counts.suspicious == 1 else "them"
-        parts.append(f"{counts.suspicious} looked suspicious, so we marked {pronoun} for care.")
-    if not counts.quarantined and not counts.suspicious:
-        parts.append("Nothing dangerous was found.")
+        parts.append(f"{counts.suspicious} looked suspicious.")
+        if counts.quarantined:
+            moved = "all of them" if counts.quarantined == counts.suspicious and counts.suspicious > 1 else (
+                "it" if counts.suspicious == 1 else str(counts.quarantined))
+            parts.append(f"We moved {moved} out of your inbox.")
+    else:
+        parts.append("Nothing looked suspicious.")
     return " ".join(parts)
+
+
+def moved_line(count: int) -> str:
+    """The quiet line under the Suspicious number."""
+    return f"{count} moved out of your inbox" if count else ""
 
 
 @dataclass(frozen=True)
@@ -326,31 +411,58 @@ class StatCard:
     tone: str  # ok | warn | bad
     aria: str
     spark: Sparkline | None = None
+    sub: str = ""  # "2 moved out of your inbox"
 
 
-def stat_cards(counts: WeeklyCounts, daily: DailyCounts | None = None) -> list[StatCard]:
-    """The three numbers on the home page. Each one opens the matching list.
-    The lists show the same 7 days the numbers count; ``daily`` adds a
-    sparkline of those days."""
-
-    def hint(n: int) -> str:
-        return "Tap to see why" if n else "Nothing here this week"
+def stat_cards(counts: WeeklyCounts, daily: DailyCounts | None = None, *, mailbox: str | None = None,
+               period: str = "7d") -> list[StatCard]:
+    """The two numbers on Home: Checked and Suspicious (which includes the
+    email we moved out of the inbox). Each one opens the matching tab of
+    Email for the same period; ``daily`` adds a sparkline; ``mailbox`` keeps
+    the links on the selected inbox."""
+    when = PERIOD_PHRASES.get(period, PERIOD_PHRASES["7d"])
+    unit = daily.unit if daily is not None else "day"
 
     def spark(values: tuple[int, ...] | None) -> Sparkline | None:
-        return sparkline(values, daily.days) if daily is not None and values is not None else None
+        return sparkline(values, daily.days, unit=unit) if daily is not None and values is not None else None
 
+    def href(tab: str) -> str:
+        params = {"tab": tab, "period": period}
+        if mailbox:
+            params["mailbox"] = mailbox
+        return "/messages?" + urlencode(params)
+
+    def hint(n: int) -> str:
+        return "Tap to see why" if n else f"Nothing here {when}"
+
+    moved = moved_line(counts.quarantined)
     return [
         StatCard("Checked", counts.safe, "Looked fine. Tap to see them" if counts.safe else hint(0),
-                 "/messages?level=safe&days=7", "ok", f"{_n(counts.safe, 'email')} checked and fine this week",
+                 href("checked"), "ok", f"{_n(counts.safe, 'email')} checked and fine {when}",
                  spark(daily.safe if daily else None)),
         StatCard("Suspicious", counts.suspicious, hint(counts.suspicious),
-                 "/messages?level=suspicious&days=7", "warn",
-                 f"{counts.suspicious} suspicious this week. See which emails and why",
-                 spark(daily.suspicious if daily else None)),
-        StatCard("In Quarantine", counts.quarantined, hint(counts.quarantined),
-                 "/messages?filter=quarantined&days=7", "bad",
-                 f"{counts.quarantined} in Quarantine this week. See which emails and why",
-                 spark(daily.quarantined if daily else None)),
+                 href("suspicious"), "bad" if counts.quarantined else "warn",
+                 f"{counts.suspicious} suspicious {when}" + (f", {moved}" if moved else "") + ". See which emails and why",
+                 spark(daily.suspicious if daily else None), moved),
+    ]
+
+
+@dataclass(frozen=True)
+class PeriodItem:
+    key: str
+    label: str
+    href: str
+    current: bool
+
+
+def period_items(current: str, base: str, extra: dict[str, Any] | None = None) -> list[PeriodItem]:
+    """Today · 7 days · 1 month · 1 year, as links that keep the other filters."""
+    from .queries import PERIODS
+
+    params = {k: v for k, v in (extra or {}).items() if v not in (None, "")}
+    return [
+        PeriodItem(key, label, f"{base}?{urlencode({**params, 'period': key})}", key == current)
+        for key, label in PERIODS
     ]
 
 
@@ -378,9 +490,9 @@ def sender_entry(entry: Any, *, reason: Any = None, stats: Any = None, now: date
     elif trusted:
         label = "Trusted a little. It was not verified by Google, so we still check its links."
     elif entry.scope == "domain" or entry.authenticated:
-        label = "Goes straight to Quarantine."
+        label = "Their email is moved out of your inbox."
     else:
-        label = "Goes to Quarantine unless Google confirms it is really them."
+        label = "Their email is moved out of your inbox unless Google confirms it is really them."
     words = reason_sentence(reason) if reason is not None else ""
     since = short_date(getattr(entry, "created_at", None))
     checks = ""
@@ -412,34 +524,29 @@ class Tab:
 
 MESSAGE_TABS: tuple[tuple[str, str], ...] = (
     ("all", "All"),
-    ("safe", "Checked"),
+    ("checked", "Checked"),
     ("suspicious", "Suspicious"),
-    ("quarantined", "Quarantine"),
 )
 
 EMPTY_STATES: dict[str, tuple[str, str]] = {
     "all": ("Nothing to show", "No email matches these filters yet."),
-    "safe": ("Nothing to show", "No email was marked Checked in this period."),
+    "checked": ("Nothing to show", "No email was marked Checked in this period."),
     "suspicious": ("Nothing suspicious", "No email looked suspicious in this period. Nothing to do."),
-    "quarantined": ("Quarantine is empty", "We did not need to hold back any email in this period."),
-    "malicious": ("Nothing to show", "No dangerous email in this period."),
     "unknown": ("Nothing to show", "We finished checking every email in this period."),
 }
 
 
-def message_tabs(current: str, *, days: int | None, mailbox: str | None) -> list[Tab]:
+def message_tabs(current: str, *, period: str | None, mailbox: str | None) -> list[Tab]:
     tabs = []
     for key, label in MESSAGE_TABS:
-        params = []
-        if key in ("safe", "suspicious"):
-            params.append(f"level={key}")
-        elif key == "quarantined":
-            params.append("filter=quarantined")
-        if days:
-            params.append(f"days={days}")
+        params: dict[str, str] = {}
+        if key != "all":
+            params["tab"] = key
+        if period:
+            params["period"] = period
         if mailbox:
-            params.append(f"mailbox={mailbox}")
-        href = "/messages" + ("?" + "&".join(params) if params else "")
+            params["mailbox"] = mailbox
+        href = "/messages" + ("?" + urlencode(params) if params else "")
         tabs.append(Tab(key, label, href, key == current))
     return tabs
 
@@ -471,7 +578,7 @@ ACTION_PHRASES = {
     "recheck_requested": "Asked us to re-check recent email",
     "rescore": "Checked an email again",
     "rescore_failed": "Could not check an email again",
-    "client_quarantine": "Moved an email to Quarantine for you",
+    "client_quarantine": "Moved an email out of your inbox for you",
     "client_mark_safe": "Marked an email Checked for you",
     "assistant_question": "Asked Secureddy a question",
 }
@@ -561,6 +668,129 @@ class UrlView:
     screenshot_url: str | None
     detonated: bool
     signals: tuple[SignalView, ...]
+    # "safe_to_open" | "open_in_reading_room" | "do_not_open" (see link_advice)
+    advice: str = "open_in_reading_room"
+    advice_reason: str = ""
+    downloads: str = ""
+
+
+# --------------------------------------------------------------------------
+# Link advice: may I click this?
+#
+# The analysis engine may record ``click_advice`` (+ ``click_advice_reason``,
+# ``downloads_summary``) per link. Older verdicts do not have them, so the
+# advice is derived from the link's level when missing, and every read is
+# defensive (getattr / dict.get): the web app works before and after the
+# engine starts writing these fields.
+# --------------------------------------------------------------------------
+
+LINK_ADVICE = ("safe_to_open", "open_in_reading_room", "do_not_open")
+LINK_ADVICE_COPY: dict[str, dict[str, str]] = {
+    "safe_to_open": {
+        "title": "This link looks safe",
+        "text": "We opened it in our sandbox and found nothing wrong.",
+        "tone": "ok",
+    },
+    "open_in_reading_room": {
+        "title": "Open this link in the Reading Room",
+        "text": "We are not sure about this link. The Reading Room opens it on our servers, so nothing reaches your device.",
+        "tone": "warn",
+    },
+    "do_not_open": {
+        "title": "Do not open this link",
+        "text": "We think this link is dangerous.",
+        "tone": "bad",
+    },
+}
+_LEVEL_ADVICE = {"safe": "safe_to_open", "suspicious": "open_in_reading_room", "malicious": "do_not_open"}
+
+
+def _field(obj: Any, raw: dict[str, Any] | None, name: str) -> Any:
+    value = getattr(obj, name, None) if obj is not None else None
+    if value is None and isinstance(raw, dict):
+        value = raw.get(name)
+    return getattr(value, "value", value)  # enums
+
+
+def link_advice(url_verdict: Any, raw: dict[str, Any] | None = None) -> tuple[str, str, str]:
+    """(advice, reason, downloads summary) for one link's verdict."""
+    advice = _field(url_verdict, raw, "click_advice")
+    level = _field(url_verdict, raw, "level")
+    if advice not in LINK_ADVICE:
+        advice = _LEVEL_ADVICE.get(str(level or ""), "open_in_reading_room")
+    reason = _field(url_verdict, raw, "click_advice_reason")
+    downloads = downloads_text(_field(url_verdict, raw, "downloads_summary"))
+    return str(advice), str(reason or "")[:400], downloads[:400]
+
+
+DOWNLOAD_KINDS = {
+    "program": "a program", "script": "a script", "installer": "an installer", "archive": "a compressed folder",
+    "password_archive": "a password-protected compressed folder", "disk_image": "a disk image",
+    "shortcut": "a shortcut", "document": "a document",
+}
+
+
+def downloads_text(value: Any) -> str:
+    """What opening a link downloads, in one sentence. Accepts the engine's
+    list of ``DownloadInfo`` (objects or dicts) or a ready-made sentence."""
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list | tuple):
+        return ""
+    parts: list[str] = []
+    for item in value[:5]:
+        get = item.get if isinstance(item, dict) else (lambda k, d=None, _i=item: getattr(_i, k, d))
+        name = str(get("filename", "") or "a file")[:80]
+        kind = DOWNLOAD_KINDS.get(str(get("category", "") or ""), "")
+        piece = f"{name} ({kind})" if kind else name
+        if get("dangerous", False):
+            why = str(get("why", "") or "").rstrip(".")
+            piece += f", dangerous{': ' + why if why else ''}"
+        parts.append(piece)
+    return "Opening it downloads " + "; ".join(parts) + "."
+
+
+def link_summary(message: MessageRow) -> str:
+    """The verdict-level summary of the email's links, when the engine wrote one."""
+    raw = message.verdict if isinstance(message.verdict, dict) else {}
+    value = raw.get("link_summary") or raw.get("links_summary")
+    if isinstance(value, dict):
+        value = value.get("text") or value.get("summary") or ""
+    return str(value or "")[:600]
+
+
+def _same_url(a: str, b: str) -> bool:
+    return a == b or a.rstrip("/") == b.rstrip("/")
+
+
+def find_link(message: MessageRow, url: str) -> tuple[UrlView | None, int]:
+    """The analysed link matching ``url`` in this email, and its index (-1 when
+    the link was not analysed, e.g. it only appears in the HTML we render)."""
+    verdict = parse_verdict(message.verdict)
+    raw_urls = (message.verdict or {}).get("urls") if isinstance(message.verdict, dict) else None
+    if verdict is None:
+        return None, -1
+    for index, u in enumerate(verdict.urls):
+        if _same_url(u.url, url) or (u.final_url and _same_url(u.final_url, url)):
+            raw = raw_urls[index] if isinstance(raw_urls, list) and index < len(raw_urls) else None
+            advice, reason, downloads = link_advice(u, raw)
+            return (
+                UrlView(
+                    url=u.url,
+                    final_url=u.final_url if u.final_url and u.final_url != u.url else None,
+                    chip=level_chip(u.level.value),
+                    screenshot_url=None,
+                    detonated=u.detonated,
+                    signals=_signals(u.signals),
+                    advice=advice,
+                    advice_reason=reason,
+                    downloads=downloads,
+                ),
+                index,
+            )
+    return None, -1
 
 
 @dataclass(frozen=True)
@@ -716,7 +946,7 @@ def artifact_refs(raw: dict[str, Any] | None) -> frozenset[str]:
 
 HEADLINES = {
     "checking": "We are still checking this email.",
-    "quarantine": "This email is dangerous. We moved it to Quarantine.",
+    "quarantine": "This email is dangerous. We moved it out of your inbox.",
     "malicious": "This email is dangerous.",
     "suspicious": "Be careful with this email.",
     "safe": "This email looks safe.",
@@ -732,7 +962,7 @@ def headline(message: MessageRow) -> str:
     if decision == "safe" and message.level == "safe":
         return "You marked this email as safe."
     if decision == "fake":
-        return "You marked this email as fake. It is in Quarantine." if message.quarantined else (
+        return "You marked this email as fake. We moved it out of your inbox." if message.quarantined else (
             "You marked this email as fake."
         )
     if message.quarantined and message.state != STATE_RESTORE_REQUESTED:
@@ -852,17 +1082,25 @@ def build_report(message: MessageRow, *, artifact_url: ArtifactUrl, download_url
             can_recheck=not busy and message.state not in ("pending", "analyzing"),
         )
 
-    urls = tuple(
-        UrlView(
-            url=u.url,
-            final_url=u.final_url if u.final_url and u.final_url != u.url else None,
-            chip=level_chip(u.level.value),
-            screenshot_url=artifact_url(u.screenshot_ref) if u.screenshot_ref else None,
-            detonated=u.detonated,
-            signals=_signals(u.signals),
+    raw_urls = (message.verdict or {}).get("urls")
+    raw_urls = raw_urls if isinstance(raw_urls, list) else []
+    url_views = []
+    for index, u in enumerate(verdict.urls):
+        advice, reason, downloads = link_advice(u, raw_urls[index] if index < len(raw_urls) else None)
+        url_views.append(
+            UrlView(
+                url=u.url,
+                final_url=u.final_url if u.final_url and u.final_url != u.url else None,
+                chip=level_chip(u.level.value),
+                screenshot_url=artifact_url(u.screenshot_ref) if u.screenshot_ref else None,
+                detonated=u.detonated,
+                signals=_signals(u.signals),
+                advice=advice,
+                advice_reason=reason,
+                downloads=downloads,
+            )
         )
-        for u in verdict.urls
-    )
+    urls = tuple(url_views)
     attachments = tuple(
         AttachmentView(
             filename=a.filename,
@@ -1010,13 +1248,13 @@ def decision_flash(result: SenderDecision, *, sender: str) -> str:
         return f"{done} Next time {who} writes, we'll still check it and tell you if it's safe.{scope_note}"
 
     if result.scope == "domain" or result.authenticated:
-        future = f"From now on, email from {what} goes straight to Quarantine."
+        future = f"From now on, email from {what} is moved out of your inbox."
     else:
         future = (
-            f"From now on, email that claims to be from {what} but is not confirmed by Google goes "
-            "straight to Quarantine."
+            f"From now on, email that claims to be from {what} but is not confirmed by Google is "
+            "moved out of your inbox."
         )
-    now = " We are moving this email to Quarantine now." if result.message_action == "quarantine" else ""
+    now = " We are moving this email out of your inbox now." if result.message_action == "quarantine" else ""
     return future + now
 
 
@@ -1042,6 +1280,7 @@ class MessageListRow:
     can_mark_fake: bool = False
     trust: str = ""  # confirmed | changed | incomplete for a client-trusted sender
     quarantined: bool = False
+    moved: Chip | None = None  # "Moved out of inbox"
 
 
 def row_actions(message: MessageRow) -> tuple[bool, bool]:
@@ -1065,7 +1304,7 @@ def list_rows(pairs: list[tuple[MessageRow, MailboxRow]]) -> list[MessageListRow
             MessageListRow(
                 m, mb, verdict_chip(m), message_summary(m), list_reason(m),
                 initials(m.from_name, m.from_address), avatar_tone(m.from_address or m.from_name), safe, fake,
-                trust_outcome(m), bool(m.quarantined),
+                trust_outcome(m), bool(m.quarantined), moved_chip(m),
             )
         )
     return rows
@@ -1185,7 +1424,7 @@ SIGNAL_COPY: dict[str, SignalCopy] = {
     "url.known_bad": SignalCopy(
         "A link goes to a known dangerous website",
         "Security services already list {host} as used in attacks.",
-        "Do not open this link. Delete the email or leave it in Quarantine.",
+        "Do not open this link. Delete the email or leave it out of your inbox.",
     ),
     "url.lookalike": SignalCopy(
         "A link goes to a fake copy of {domain}",
@@ -1716,10 +1955,47 @@ def signal_copy(signal: Any, *, sender: str = "", verified_domain: str = "") -> 
             "Do not sign in there. Go to {shown} by typing it yourself.",
         )
     if template is None:
+        template = engine_signal_copy().get(code)
+    if template is None:
         return SignalCopy(getattr(signal, "title", "") or "Something looked unusual", getattr(signal, "detail", "") or "")
-    return SignalCopy(
-        template.title.format_map(values), template.meaning.format_map(values), template.todo.format_map(values)
-    )
+    return SignalCopy(_fill(template.title, values), _fill(template.meaning, values), _fill(template.todo, values))
+
+
+def _fill(text: str, values: _Blank) -> str:
+    try:
+        return text.format_map(values)
+    except (ValueError, IndexError, AttributeError):  # stray braces in copy we did not write
+        return text.replace("{", "").replace("}", "")
+
+
+def engine_signal_copy() -> dict[str, SignalCopy]:
+    """Copy the analysis engine ships for its own codes
+    (``analysis.signal_copy.SIGNAL_COPY``: {"title", "explanation",
+    "what_to_do"}), used for codes this module has no wording for. Read
+    defensively: the module may not exist yet, and a malformed entry is
+    skipped rather than shown."""
+    try:
+        from reddysec.analysis import signal_copy as shared  # type: ignore[attr-defined]
+    except ImportError:
+        return {}
+    table = getattr(shared, "SIGNAL_COPY", None)
+    if not isinstance(table, dict):
+        return {}
+    out: dict[str, SignalCopy] = {}
+    for code, entry in table.items():
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        if not title:
+            continue
+        out[str(code)] = SignalCopy(
+            title, str(entry.get("explanation") or "").strip(), str(entry.get("what_to_do") or "").strip()
+        )
+    return out
+
+
+def known_signal_code(code: str) -> bool:
+    return code in SIGNAL_COPY or code in GOOD_SIGN_COPY or code in engine_signal_copy()
 
 
 def short_reason(signal: Any, *, sender: str = "", verified_domain: str = "") -> str:

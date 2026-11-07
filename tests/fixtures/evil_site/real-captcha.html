@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sign up - Example Store</title>
+  <script src="/static/recaptcha/api.js" async defer></script>
+</head>
+<body>
+  <h1>Create your account</h1>
+  <form action="/signup" method="post">
+    <label>Email <input type="email" name="email"></label>
+    <div class="g-recaptcha" data-sitekey="6Lc_example"></div>
+    <p>Please confirm you are not a robot.</p>
+    <button type="submit">Create account</button>
+  </form>
+</body>
+</html>

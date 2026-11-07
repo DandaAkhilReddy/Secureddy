@@ -13,18 +13,6 @@
   <div class="flash flash-error" role="alert">{{ error }}</div>
   {% endif %}
 
-  {% if needs_code %}
-  <form method="post" action="/auth/login" class="stack signin-form">
-    {{ csrf() }}
-    <input type="hidden" name="next" value="{{ next_url }}">
-    <p class="help">Open your authenticator app and enter the 6-digit code for <strong>{{ email }}</strong>.</p>
-    <label class="field">
-      <span>Code</span>
-      <input class="input input-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus>
-    </label>
-    <button class="btn btn-primary btn-block" type="submit">Continue</button>
-  </form>
-  {% else %}
   {% if any_provider %}
   <div class="signin-buttons">
     {% if google_login_enabled %}
@@ -78,6 +66,5 @@
     </details>
     {% endif %}
   </details>
-  {% endif %}
 </section>
 {% endblock %}

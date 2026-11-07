@@ -45,7 +45,13 @@ Never switched off, for anyone, by any trust:
 * dangerous attachments (every ``attachment.*`` signal),
 * links to sites registered in the last 30 days, raw IP addresses, links that
   carry their own code, and requests to change bank details,
-* failed authentication, and the client's own block list.
+* failed authentication, and the client's own block list,
+* "do it yourself" attacks seen in the sandbox or the email: a ClickFix /
+  fake CAPTCHA page or a clipboard hijack, a tech-support scam page, a crypto
+  wallet drainer, a copied Microsoft sign-in page (AiTM kit), a sign-in page
+  on a free hosting service, a device-code lure and an OAuth consent link.
+  A trusted sender cannot override these: a hacked vendor account sending a
+  ClickFix link is exactly the case they exist for.
 
 Threat model
 ------------
@@ -115,6 +121,17 @@ PROTECTED_CODES: frozenset[str] = frozenset(
         "dynamic.dangerous_download",
         "dynamic.new_domain",
         "dynamic.file_network_activity",
+        # Lures (analysis.lures): never softened, whoever sent the message.
+        "dynamic.clickfix",
+        "dynamic.clipboard_hijack",
+        "dynamic.fake_captcha",
+        "dynamic.tech_support_scam",
+        "dynamic.wallet_drainer",
+        "dynamic.aitm_proxy",
+        "dynamic.free_hosting_login",
+        "dynamic.device_code_lure",
+        "bec.device_code_lure",
+        "url.oauth_consent_lure",
         "auth.dmarc_fail",
         "auth.dkim_fail",
         "auth.spf_fail",
@@ -153,6 +170,12 @@ BULK_SOFT_CODES: frozenset[str] = frozenset(
         "sender.reply_to_mismatch",
         "sender.return_path_mismatch",
         "header.date_skew",
+        # Real newsletters link to GitHub Pages blogs, Google Forms surveys and
+        # route through google.com/url; real stores send renewal receipts with
+        # a phone number. Lookalike senders never get this (condition 3).
+        "url.free_hosting",
+        "url.open_redirect",
+        "bec.callback_scam",
     }
 )
 
@@ -172,6 +195,10 @@ SOFT_DYNAMIC_CODES: frozenset[str] = frozenset(
         "dynamic.qr_on_page",
         "dynamic.young_domain",
         "dynamic.unexpected_download",
+        "dynamic.anti_analysis",
+        "dynamic.ua_cloaking",
+        "dynamic.captcha_gated_login",
+        "dynamic.notification_spam",
     }
 )
 BULK_DYNAMIC_CAP = 15

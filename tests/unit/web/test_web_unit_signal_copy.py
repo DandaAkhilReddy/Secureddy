@@ -49,7 +49,8 @@ class TestEveryCodeHasCopy:
 
     @pytest.mark.parametrize("code", sorted(engine_codes()))
     def test_copy_exists_and_reads_well(self, code):
-        assert code in p.SIGNAL_COPY or code in p.GOOD_SIGN_COPY, f"no friendly copy for {code}"
+        # Our own copy, or the copy the analysis engine ships (analysis.signal_copy).
+        assert p.known_signal_code(code), f"no friendly copy for {code}"
         copy = p.signal_copy(sig(code, filename="Invoice.pdf", url="https://evil.example/x"), sender="a@b.com")
         assert copy.title and "{" not in copy.title + copy.meaning + copy.todo
         assert "DMARC" not in copy.title and "DKIM" not in copy.title
@@ -106,7 +107,7 @@ class TestReport:
     def test_withheld_trust_is_not_a_good_sign(self):
         v = verdict_json("malicious", signals=[sig("history.client_trusted", 0, value="v.com"), sig("url.known_bad", 100)])
         r = self._report(message("malicious", verdict=v, quarantined=True))
-        assert not r.good_signs and r.headline == "This email is dangerous. We moved it to Quarantine."
+        assert not r.good_signs and r.headline == "This email is dangerous. We moved it out of your inbox."
 
     @pytest.mark.parametrize(
         ("kw", "expected"),
@@ -123,7 +124,7 @@ class TestReport:
     def test_decisions_in_headline_and_buttons(self):
         fake = message(verdict=verdict_json(client_decision=None) | {"client_decision": {"decision": "fake"}},
                        quarantined=True)
-        assert p.headline(fake) == "You marked this email as fake. It is in Quarantine."
+        assert p.headline(fake) == "You marked this email as fake. We moved it out of your inbox."
         assert p.headline(message(verdict={"client_decision": {"decision": "fake"}})) == "You marked this email as fake."
         r = self._report(fake)
         assert not r.can_mark_fake and r.can_mark_safe
@@ -176,9 +177,9 @@ class TestDecisionFlash:
              "Done. We moved it back to your inbox. Next time a@b.com writes, we'll still check it and tell you "
              "if it's safe. Because it wasn't verified by Google, we trust it only a little."),
             (SenderDecision("blocked", "domain", "bad.com", True, False, "quarantine"),
-             "email from bad.com goes straight to Quarantine. We are moving this email to Quarantine now."),
+             "email from bad.com is moved out of your inbox. We are moving this email out of your inbox now."),
             (SenderDecision("blocked", "address", "x@bad.com", True, True, "none"),
-             "email from x@bad.com goes straight to Quarantine."),
+             "email from x@bad.com is moved out of your inbox."),
             (SenderDecision("blocked", "address", "x@bad.com", False, False, "none"),
              "but is not confirmed by Google"),
         ],
@@ -190,20 +191,34 @@ class TestDecisionFlash:
 class TestCardsTabsEntries:
     def test_stat_cards(self):
         cards = p.stat_cards(WeeklyCounts(checked=10, suspicious=3, quarantined=0, safe=7))
-        assert [(c.label, c.count, c.href) for c in cards] == [
-            ("Checked", 7, "/messages?level=safe&days=7"),
-            ("Suspicious", 3, "/messages?level=suspicious&days=7"),
-            ("In Quarantine", 0, "/messages?filter=quarantined&days=7"),
+        assert [(c.label, c.count, c.href, c.tone) for c in cards] == [
+            ("Checked", 7, "/messages?tab=checked&period=7d", "ok"),
+            ("Suspicious", 3, "/messages?tab=suspicious&period=7d", "warn"),
         ]
-        assert cards[1].hint == "Tap to see why" and cards[2].hint == "Nothing here this week"
+        assert cards[1].hint == "Tap to see why" and cards[1].sub == ""
+        none = p.stat_cards(WeeklyCounts(), period="today")
+        assert none[0].hint == "Nothing here today" and none[1].hint == "Nothing here today"
+
+    def test_suspicious_card_counts_moved_email(self):
+        cards = p.stat_cards(WeeklyCounts(checked=12, suspicious=4, quarantined=2, safe=8), period="1m", mailbox="mbx_1")
+        sus = cards[1]
+        assert sus.count == 4 and sus.tone == "bad" and sus.sub == "2 moved out of your inbox"
+        assert sus.href == "/messages?tab=suspicious&period=1m&mailbox=mbx_1"
+        assert "2 moved out of your inbox" in sus.aria and "this month" in sus.aria
+
+    def test_period_items(self):
+        items = p.period_items("1m", "/", {"mailbox": "mbx_1", "q": None})
+        assert [(i.label, i.current) for i in items] == [
+            ("Today", False), ("7 days", False), ("1 month", True), ("1 year", False)]
+        assert items[0].href == "/?mailbox=mbx_1&period=today"
 
     def test_tabs(self):
-        tabs = p.message_tabs("suspicious", days=7, mailbox="mbx_1")
-        assert [t.label for t in tabs] == ["All", "Checked", "Suspicious", "Quarantine"]
-        assert [t.current for t in tabs] == [False, False, True, False]
-        assert tabs[0].href == "/messages?days=7&mailbox=mbx_1"
-        assert tabs[3].href == "/messages?filter=quarantined&days=7&mailbox=mbx_1"
-        assert p.message_tabs("all", days=None, mailbox=None)[0].href == "/messages"
+        tabs = p.message_tabs("suspicious", period="7d", mailbox="mbx_1")
+        assert [t.label for t in tabs] == ["All", "Checked", "Suspicious"]
+        assert [t.current for t in tabs] == [False, False, True]
+        assert tabs[0].href == "/messages?period=7d&mailbox=mbx_1"
+        assert tabs[2].href == "/messages?tab=suspicious&period=7d&mailbox=mbx_1"
+        assert p.message_tabs("all", period=None, mailbox=None)[0].href == "/messages"
 
     @pytest.mark.parametrize(
         ("kw", "expected"),
@@ -211,7 +226,7 @@ class TestCardsTabsEntries:
             (dict(decision="trusted", scope="domain", authenticated=True), "is marked Checked"),
             (dict(decision="trusted", scope="address", authenticated=True), "Trusted when Google confirms"),
             (dict(decision="trusted", scope="address", authenticated=False), "Trusted a little"),
-            (dict(decision="blocked", scope="domain", authenticated=True), "Goes straight to Quarantine."),
+            (dict(decision="blocked", scope="domain", authenticated=True), "Their email is moved out of your inbox."),
             (dict(decision="blocked", scope="address", authenticated=False), "unless Google confirms"),
         ],
     )

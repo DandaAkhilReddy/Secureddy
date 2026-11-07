@@ -30,6 +30,10 @@ class DetonationProfile(BaseModel):
     # cheapest "is this a bot" checks used by phishing kits.
     interact: bool = True
     max_wait_ms: int = 15000
+    # Click up to three obvious lure buttons ("I'm not a robot", "Verify",
+    # "Fix it") so fake CAPTCHA / ClickFix pages reveal their clipboard payload
+    # and paste instructions. Never clicks inside a password form.
+    click_lures: bool = True
 
 
 class DetonationJob(BaseModel):
@@ -63,6 +67,9 @@ class DownloadRecord(BaseModel):
     sniffed_type: str | None = None
     stored_ref: str | None = None
     safe_copy_ref: str | None = None
+    # Filled by the chamber for ZIP downloads (optional, additive).
+    archive_entries: list[str] = Field(default_factory=list)
+    encrypted: bool = False  # a password-protected archive
 
 
 class FormRecord(BaseModel):
@@ -91,6 +98,32 @@ class PageFeatures(BaseModel):
     captcha_detected: bool = False
     automation_blocked_hint: bool = False
     status_code: int | None = None
+    # --- lure instrumentation (all optional; see chamber.lures) -------------
+    # Text the page put on the clipboard (navigator.clipboard, execCommand
+    # 'copy', copy-event setData). Each entry is capped; at most 10 kept.
+    clipboard_writes: list[str] = Field(default_factory=list)
+    # Visible text tells the reader to press keys / paste / run something.
+    clickfix_instructions: bool = False
+    # A CAPTCHA-looking check that is not a real CAPTCHA service.
+    fake_captcha: bool = False
+    # Instructions name a place to paste (Win+R, Win+X, File Explorer address
+    # bar, Terminal, PowerShell) AND a paste action.
+    run_dialog_lure: bool = False
+    instruction_hits: list[str] = Field(default_factory=list)
+    instruction_excerpt: str = ""
+    lure_clicks: list[str] = Field(default_factory=list)
+    captcha_providers: list[str] = Field(default_factory=list)  # real CAPTCHA scripts loaded
+    notification_permission_requested: bool = False
+    wallet_requests: list[str] = Field(default_factory=list)  # window.ethereum methods called
+    seed_phrase_inputs: int = 0
+    fullscreen_requested: bool = False
+    keyboard_lock: bool = False
+    dialog_count: int = 0
+    beforeunload_trap: bool = False
+    console_clear_count: int = 0
+    anti_debug: bool = False
+    ua_cloaking: bool = False
+    phone_numbers: list[str] = Field(default_factory=list)
 
 
 class DetonationStatus(str, Enum):

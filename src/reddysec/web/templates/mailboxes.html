@@ -1,117 +1,168 @@
 {% extends "base.html" %}
 {% from "_macros.html" import chip, csrf, icon, connect_chooser, empty_art, provider_logo with context %}
-{% block title %}Mailboxes · Secureddy{% endblock %}
+{% block title %}Your accounts · Secureddy{% endblock %}
 {% block content %}
-<header class="page-head">
-  <h1>Mailboxes</h1>
-  <p class="lede">The mailboxes we watch for you, and how closely.</p>
+<header class="page-head page-head-row">
+  <div>
+    <h1>Your accounts</h1>
+    <p class="lede">Every mailbox we protect for you. Each one has the same options.</p>
+  </div>
+  <a class="btn btn-primary" href="#add">{{ icon("plus") }}<span>Add an account</span></a>
 </header>
 
 {% if mailboxes %}
-<section class="stack-lg">
+<section class="acct-grid" aria-label="Connected accounts">
   {% for m in mailboxes %}
-  <article class="card mailbox-card">
-    <div class="card-head mailbox-head">
+  {% set signed_out = m.row.status == "disconnected" %}
+  <article class="card acct-card{% if signed_out %} acct-off{% endif %}" id="acct-{{ m.row.id }}" aria-labelledby="acct-title-{{ m.row.id }}">
+    <div class="acct-head">
       <span class="mailbox-logo">{{ provider_logo(PROVIDER_LOGOS.get(m.row.provider, "other")) }}</span>
-      <div class="mailbox-title">
-        <h2>{{ m.row.address }}</h2>
-        <p class="muted">{{ m.row.provider | provider }}{% if m.row.last_sync_at %} · last checked {{ m.row.last_sync_at | ago }}{% endif %}</p>
+      <div class="acct-id">
+        <h2 id="acct-title-{{ m.row.id }}">{{ m.row.address }}</h2>
+        <p class="muted small">{{ m.row.provider | provider }}{% if m.row.last_sync_at and not signed_out %} · checked {{ m.row.last_sync_at | ago }}{% endif %}</p>
       </div>
-      <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
+      <div class="chips">{{ chip(m.account.chip) }}{% if not signed_out %} {{ chip(m.mode) }}{% endif %}</div>
     </div>
-    {% if m.row.last_error and m.row.status in ("error", "active") %}
-    <p class="flash flash-warn" role="status">{% if m.row.last_error in RETRYING_ERRORS %}{{ m.row.last_error }}{% else %}We hit a problem with this mailbox: {{ m.row.last_error }}{% endif %}</p>
+
+    {% if m.account.problem %}
+    <div class="acct-problem acct-problem-{{ m.account.chip.tone }}" role="status">{{ icon("warn", "ico") }}<div><p>{{ m.account.problem }}</p>{% if m.account.needs_reconnect and m.row.last_error %}<details class="acct-detail"><summary>Details</summary><p class="muted small">{{ m.row.last_error | truncate(200, True, "…") }}</p></details>{% endif %}</div></div>
     {% endif %}
-    {% if m.owned and m.row.status != "disconnected" %}
-    <form method="post" action="/mailboxes/{{ m.row.id }}/mode" class="mode-form">
-      {{ csrf() }}
-      <fieldset>
-        <legend>Protection mode</legend>
-        <label class="radio">
-          <input type="radio" name="mode" value="scan"{% if m.row.mode == "scan" %} checked{% endif %}>
-          <span><strong>Scan.</strong> Email lands as usual and is labelled Checked, Suspicious or Quarantine within seconds. Dangerous email is moved out of the inbox.</span>
-        </label>
-        <label class="radio">
-          <input type="radio" name="mode" value="hold"{% if m.row.mode == "hold" %} checked{% endif %}>
-          <span><strong>Hold.</strong> New email waits out of sight until we have checked it, usually under a minute and at most {{ hold_timeout_s }} seconds. If our service ever stops, a safety switch releases everything within {{ hold_minutes }} minutes. Nothing is ever stuck.</span>
-        </label>
-      </fieldset>
-      <button class="btn btn-quiet" type="submit">Save mode</button>
-    </form>
-    <div class="actions actions-wrap">
+
+    {% if not signed_out %}
+    <dl class="acct-stats">
+      <div><dt>Checked this week</dt><dd class="num">{{ m.week.checked }}</dd></div>
+      <div><dt>Flagged</dt><dd class="num{% if m.week.flagged %} acct-flagged{% endif %}">{{ m.week.flagged }}</dd></div>
+      <div><dt>Mode</dt><dd>{{ "Hold" if m.row.mode == "hold" else "Scan" }}</dd></div>
+    </dl>
+    {% endif %}
+
+    {% if m.owned %}
+    <div class="acct-actions">
+      {% if not signed_out %}
+      <a class="btn btn-quiet btn-small" href="/messages?mailbox={{ m.row.id }}">{{ icon("mail") }}<span>Open inbox</span></a>
+      {% endif %}
+      {% if m.account.needs_reconnect or signed_out %}
+      <form method="post" action="/mailboxes/{{ m.row.id }}/reconnect">
+        {{ csrf() }}
+        <button class="btn btn-primary btn-small" type="submit">{{ icon("refresh") }}<span>{{ "Sign in again" if signed_out else "Reconnect" }}</span></button>
+      </form>
+      {% endif %}
       {% if m.row.status == "active" %}
       <form method="post" action="/mailboxes/{{ m.row.id }}/pause" data-confirm="Pause protection? New email will not be checked until you resume.">
         {{ csrf() }}
-        <button class="btn btn-quiet" type="submit">Pause protection</button>
+        <button class="btn btn-quiet btn-small" type="submit">{{ icon("pause") }}<span>Pause</span></button>
       </form>
-      {% else %}
+      {% elif m.row.status in ("paused", "error") %}
       <form method="post" action="/mailboxes/{{ m.row.id }}/resume">
         {{ csrf() }}
-        <button class="btn btn-primary" type="submit">Resume protection</button>
+        <button class="btn btn-quiet btn-small" type="submit">{{ icon("play") }}<span>Resume</span></button>
       </form>
       {% endif %}
-      <form method="post" action="/mailboxes/{{ m.row.id }}/disconnect" data-confirm="Disconnect this mailbox? We will delete its password or token and stop checking it.">
+      {% if not signed_out and not m.account.needs_reconnect %}
+      <form method="post" action="/mailboxes/{{ m.row.id }}/reconnect">
         {{ csrf() }}
-        <button class="btn btn-danger" type="submit">Disconnect</button>
+        <button class="btn btn-ghost btn-small" type="submit">{{ icon("refresh") }}<span>Reconnect</span></button>
       </form>
+      {% endif %}
     </div>
+
+    {% if not signed_out %}
+    <details class="acct-more">
+      <summary>{{ icon("settings") }}<span>Settings</span><span class="muted small">Mode, trusted and blocked senders, re-check</span></summary>
+      <div class="acct-more-body">
+        <form method="post" action="/mailboxes/{{ m.row.id }}/mode" class="mode-form">
+          {{ csrf() }}
+          <fieldset>
+            <legend>Protection mode</legend>
+            <label class="radio">
+              <input type="radio" name="mode" value="scan"{% if m.row.mode == "scan" %} checked{% endif %}>
+              <span><strong>Scan.</strong> Email lands as usual and is labelled Checked or Suspicious within seconds. Dangerous email is moved out of the inbox, into a Secureddy Quarantine folder.</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="mode" value="hold"{% if m.row.mode == "hold" %} checked{% endif %}>
+              <span><strong>Hold.</strong> New email waits out of sight until we have checked it, usually under a minute and at most {{ hold_timeout_s }} seconds. If our service ever stops, a safety switch releases everything within {{ hold_minutes }} minutes. Nothing is ever stuck.</span>
+            </label>
+          </fieldset>
+          <button class="btn btn-quiet btn-small" type="submit">Save mode</button>
+        </form>
+
+        <section class="senders" aria-labelledby="senders-{{ m.row.id }}">
+          <h3 id="senders-{{ m.row.id }}">Trusted &amp; blocked senders</h3>
+          {% if m.senders %}
+          <ul class="sender-list">
+            {% for e in m.senders %}
+            <li class="sender-row{% if e.changed %} sender-changed{% endif %}">
+              <div class="sender-main">
+                <div class="sender-top">
+                  <span class="chip tone-{{ 'ok' if e.trusted else 'bad' }}">{{ "Trusted" if e.trusted else "Blocked" }}</span>
+                  <strong class="sender-value">{{ e.value }}</strong>
+                </div>
+                <p class="sender-label">{{ e.label }}</p>
+                {% if e.reason or e.since %}
+                <p class="sender-meta">{% if e.reason %}Your reason: <q>{{ e.reason }}</q>{% endif %}{% if e.reason and e.since %} &middot; {% endif %}{% if e.since %}Since {{ e.since }}{% endif %}</p>
+                {% endif %}
+                {% if e.checks %}
+                <p class="sender-checks{% if e.changed %} is-changed{% endif %}">{{ icon("warn" if e.changed else "shield-check", "ico ico-sm") }}<span>{{ e.checks }}</span></p>
+                {% endif %}
+              </div>
+              <form method="post" action="/mailboxes/{{ m.row.id }}/senders/{{ e.id }}/remove">
+                {{ csrf() }}
+                <button class="btn btn-ghost btn-small" type="submit" aria-label="Remove {{ e.value }}">Remove</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted small">None yet. On any email report, choose "Not suspicious?", "Not fake?" or "This is fake" and we will remember the sender.</p>
+          {% endif %}
+        </section>
+
+        <form method="post" action="/mailboxes/{{ m.row.id }}/recheck" class="recheck-form">
+          {{ csrf() }}
+          <button class="btn btn-quiet btn-small" type="submit">{{ icon("refresh") }}<span>Re-check last 7 days</span></button>
+          <span class="muted small">Checks recent email again with our latest rules and your choices above.</span>
+        </form>
+
+        <details class="danger-zone">
+          <summary class="btn btn-danger btn-small">{{ icon("logout") }}<span>Sign out of this mailbox</span></summary>
+          <div class="danger-body">
+            <p>We stop checking <strong>{{ m.row.address }}</strong>, cancel our access{% if m.row.provider == "gmail" %} with Google{% endif %} and delete our copy of the {{ "app password" if m.row.provider not in ("gmail", "microsoft") else "sign-in token" }}. Your email stays where it is.</p>
+            <form method="post" action="/mailboxes/{{ m.row.id }}/disconnect" data-confirm="Sign out of {{ m.row.address }}? We stop protecting it.">
+              {{ csrf() }}
+              <button class="btn btn-danger-solid btn-small" type="submit">Yes, sign out of this mailbox</button>
+            </form>
+          </div>
+        </details>
+      </div>
+    </details>
+    {% endif %}
     {% elif not m.owned %}
     <p class="muted small">Only the account owner can change this mailbox.</p>
-    {% endif %}
-
+    {% if m.senders %}
     <section class="senders" aria-labelledby="senders-{{ m.row.id }}">
       <h3 id="senders-{{ m.row.id }}">Trusted &amp; blocked senders</h3>
-      {% if m.senders %}
       <ul class="sender-list">
         {% for e in m.senders %}
-        <li class="sender-row{% if e.changed %} sender-changed{% endif %}">
-          <div class="sender-main">
-            <div class="sender-top">
-              <span class="chip tone-{{ 'ok' if e.trusted else 'bad' }}">{{ "Trusted" if e.trusted else "Blocked" }}</span>
-              <strong class="sender-value">{{ e.value }}</strong>
-            </div>
-            <p class="sender-label">{{ e.label }}</p>
-            {% if e.reason or e.since %}
-            <p class="sender-meta">{% if e.reason %}Your reason: <q>{{ e.reason }}</q>{% endif %}{% if e.reason and e.since %} &middot; {% endif %}{% if e.since %}Since {{ e.since }}{% endif %}</p>
-            {% endif %}
-            {% if e.checks %}
-            <p class="sender-checks{% if e.changed %} is-changed{% endif %}">{{ icon("warn" if e.changed else "shield-check", "ico ico-sm") }}<span>{{ e.checks }}</span></p>
-            {% endif %}
-          </div>
-          {% if m.owned %}
-          <form method="post" action="/mailboxes/{{ m.row.id }}/senders/{{ e.id }}/remove">
-            {{ csrf() }}
-            <button class="btn btn-ghost btn-small" type="submit" aria-label="Remove {{ e.value }}">Remove</button>
-          </form>
-          {% endif %}
-        </li>
+        <li class="sender-row"><div class="sender-main"><div class="sender-top"><span class="chip tone-{{ 'ok' if e.trusted else 'bad' }}">{{ "Trusted" if e.trusted else "Blocked" }}</span><strong class="sender-value">{{ e.value }}</strong></div><p class="sender-label">{{ e.label }}</p></div></li>
         {% endfor %}
       </ul>
-      {% else %}
-      <p class="muted small">None yet. On any email report, choose "Not suspicious?", "Not fake?" or "This is fake" and we will remember the sender.</p>
-      {% endif %}
-      {% if m.owned and m.row.status != "disconnected" %}
-      <form method="post" action="/mailboxes/{{ m.row.id }}/recheck" class="recheck-form">
-        {{ csrf() }}
-        <button class="btn btn-quiet btn-small" type="submit">Re-check last 7 days</button>
-        <span class="muted small">Checks recent email again with our latest rules and your choices above.</span>
-      </form>
-      {% endif %}
     </section>
+    {% endif %}
+    {% endif %}
   </article>
   {% endfor %}
 </section>
 {% else %}
 <section class="card empty">
   {{ empty_art("inbox") }}
-  <h2>No mailbox yet</h2>
-  <p class="muted">Connect one below and we start checking new email within a minute.</p>
+  <h2>No account yet</h2>
+  <p class="muted">Add one below and we start checking new email within a minute.</p>
 </section>
 {% endif %}
 
-<section class="card" aria-labelledby="connect-title">
-  <h2 id="connect-title">{{ "Connect another mailbox" if mailboxes else "Connect a mailbox" }}</h2>
-  <p class="muted small">Pick where your email lives. You can connect more than one.</p>
+<section class="card" id="add" aria-labelledby="connect-title">
+  <h2 id="connect-title">Add an account</h2>
+  <p class="muted small">Gmail and Outlook take one click. Yahoo takes three short steps. You can add as many as you like; they all live under this one Secureddy account.</p>
   {{ connect_chooser(google_login_enabled, microsoft_login_enabled) }}
 </section>
 {% endblock %}

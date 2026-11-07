@@ -39,7 +39,9 @@ from .routes import (
     concierge,
     dashboard,
     hooks,
+    lock,
     mailboxes,
+    mailread,
     messages,
     notifications,
     pwa,
@@ -52,6 +54,7 @@ from .security import (
     SessionCodec,
     SessionMiddleware,
 )
+from .sessions import AuthSessionMiddleware
 from .templating import build_templates, package_path, render, wants_json
 
 log = get_logger(__name__)
@@ -84,6 +87,8 @@ def create_app(
     microsoft_oauth: OAuthProvider | None = None,
     yahoo_oauth: OAuthProvider | None = None,
     imap_tester: ImapTester | None = None,
+    connector_factory: Callable[[Any], Awaitable[Any]] | None = None,
+    http_client: Any | None = None,
 ) -> FastAPI:
     """Build the FastAPI application.
 
@@ -105,6 +110,13 @@ def create_app(
         inside this process and mount it with the web tier's auth, CSRF and
         audit wiring. Ignored when ``room_router`` is given. The CLI turns this
         on; tests pass their own router or leave the room off.
+    :param connector_factory: ``async (MailboxRow) -> MailboxConnector`` used to
+        read an email live, search inside emails, archive / mark read / delete
+        and revoke a mailbox's grant. ``None`` builds the real connectors from
+        settings on first use (``mail.factory``).
+    :param http_client: the ``httpx.AsyncClient`` for "Load images" (the image
+        proxy); ``None`` creates one owned by the app. Tests pass a client on
+        an ``httpx.MockTransport``.
     """
     settings = settings or get_settings()
     database = db or get_database()
@@ -117,12 +129,15 @@ def create_app(
         yahoo_oauth = default_yahoo_oauth(settings)
     store = artifact_store or artifact_store_from_settings(settings)
 
+    import httpx
+
     owned_http = None
     if chat_model is None and settings.effective_assistant_provider not in ("", "none"):
-        import httpx
-
         owned_http = httpx.AsyncClient()
         chat_model = chat_model_from_settings(settings, owned_http)
+    owned_proxy_http = None
+    if http_client is None:
+        owned_proxy_http = http_client = httpx.AsyncClient(follow_redirects=False, timeout=10.0)
 
     room_bundle = None
     if room_router is None and enable_reading_room:
@@ -145,6 +160,8 @@ def create_app(
         finally:
             if owned_http is not None:
                 await owned_http.aclose()
+            if owned_proxy_http is not None:
+                await owned_proxy_http.aclose()
             if owns_database:
                 await database.dispose()
 
@@ -181,12 +198,22 @@ def create_app(
         max_turns=max(1, settings.assistant_max_turns),
         daily_limit=max(0, settings.assistant_daily_message_limit),
     )
+    app.state.assistant_provider = settings.effective_assistant_provider
+    app.state.http = http_client
+    app.state.connector_factory = connector_factory or _default_connector_factory(settings, database)
 
     # Middleware order: the last one added runs first. Security headers must
-    # wrap everything so even a 429 from the rate limiter carries them.
+    # wrap everything so even a 429 from the rate limiter carries them. The
+    # sign-in session (rs_sid) is resolved inside the flow cookie.
+    app.add_middleware(
+        AuthSessionMiddleware,
+        secure=settings.is_prod,
+        idle_days=max(1, settings.session_idle_days),
+        absolute_days=max(1, settings.session_absolute_days),
+    )
     app.add_middleware(
         SessionMiddleware,
-        codec=SessionCodec(settings.secret_key.get_secret_value()),
+        codec=SessionCodec(settings.secret_key.get_secret_value(), max_age=max(1, settings.session_idle_days) * 86400),
         secure=settings.is_prod,
     )
     app.add_middleware(RateLimitMiddleware, limiter=app.state.rate_limiter, prefixes=("/auth/",))
@@ -198,7 +225,9 @@ def create_app(
         auth.router,
         dashboard.router,
         messages.router,
+        mailread.router,
         assistant.router,
+        lock.router,
         mailboxes.router,
         audit.router,
         concierge.router,
@@ -215,6 +244,20 @@ def create_app(
     _register_health(app)
     _register_error_handlers(app)
     return app
+
+
+def _default_connector_factory(settings: Settings, database: Database) -> Callable[[Any], Awaitable[Any]]:
+    """Real connectors, built lazily: importing the mail stack is not free."""
+    holder: dict[str, Any] = {}
+
+    async def factory(mailbox: Any) -> Any:
+        if "f" not in holder:
+            from reddysec.mail.factory import connector_factory_from_settings
+
+            holder["f"] = connector_factory_from_settings(settings, database)
+        return await holder["f"](mailbox)
+
+    return factory
 
 
 def default_oauth(settings: Settings) -> OAuthProvider | None:

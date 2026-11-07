@@ -74,15 +74,23 @@ async def test_session_cookie_attributes(client):
     assert (
         "HttpOnly" in cookie
         and "SameSite=Lax" in cookie
-        and "Max-Age=43200" in cookie
+        and f"Max-Age={90 * 86400}" in cookie
         and "Secure" not in cookie
     )
 
 
 async def test_tampered_session_cookie_is_ignored(client, login):
     login(client, "tamper@example.com")
-    value = client.cookies.get("rs_session")
-    client.cookies.set("rs_session", value[:-3] + "abc")
+    value = client.cookies.get("rs_sid")
+    client.cookies.set("rs_sid", value[:-3] + "abc")
+    response = client.get("/")
+    assert response.status_code == 303
+    assert "rs_sid=;" in response.headers.get("set-cookie", "")  # the bad cookie is cleared
+
+
+async def test_flow_cookie_alone_signs_nobody_in(client, login):
+    login(client, "flow@example.com")
+    client.cookies.delete("rs_sid")
     assert client.get("/").status_code == 303
 
 

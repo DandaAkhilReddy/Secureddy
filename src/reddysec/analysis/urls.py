@@ -129,23 +129,17 @@ def is_shortener(host: str) -> bool:
 
 
 def _unwrap_redirector(url: str) -> str:
-    """Return the real target behind well-known enterprise link wrappers.
+    """Return the real target behind link wrappers and open redirects.
 
-    Outlook Safe Links and Google's redirector put the destination in a query
-    parameter. The destination is what the client would reach, so it is what
-    we score and detonate; the wrapper stays in ``raw`` for the record.
+    Outlook Safe Links, Proofpoint URL Defense, Google's ``/url`` redirector,
+    Bing ``/ck/a``, ``l.facebook.com`` and friends put the destination in the
+    URL itself (see ``analysis.redirects``). The destination is what the
+    client would reach, so it is what we score and detonate; the wrapper
+    stays in ``raw`` for the record and for the ``url.open_redirect`` signal.
     """
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url
-    host = (parts.hostname or "").lower()
-    params = dict(parse_qsl(parts.query, keep_blank_values=True))
-    if host.endswith("safelinks.protection.outlook.com") and params.get("url"):
-        return params["url"]
-    if host in {"www.google.com", "google.com"} and parts.path == "/url" and (params.get("q") or params.get("url")):
-        return params.get("q") or params["url"]
-    return url
+    from .redirects import unwrap
+
+    return unwrap(url)
 
 
 def normalize_url(raw: str) -> str | None:

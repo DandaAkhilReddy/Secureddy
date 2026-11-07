@@ -47,7 +47,7 @@ async def concierge_page(request: Request, user: UserRow = Depends(staff_only)) 
                 }
                 for m, mb, owner in queue
             ],
-            "levels": [(code, presenters.level_chip(code).label) for code in OVERRIDE_LEVELS],
+            "levels": [(code, presenters.STAFF_LEVEL_LABELS[code]) for code in OVERRIDE_LEVELS],
         },
     )
 
@@ -84,5 +84,5 @@ async def concierge_override(
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="We could not find that email.")
         message, mailbox = found
         await queries.override_verdict(session, user, message, mailbox, level, note.strip())
-    flash(request, f"Verdict changed to {presenters.level_chip(level).label}. The client has been told.")
+    flash(request, f"Verdict changed to {presenters.STAFF_LEVEL_LABELS[level]}. The client has been told.")
     return _see_other()

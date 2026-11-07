@@ -1,0 +1,34 @@
+# gitleaks configuration: the default rules, plus ours, minus known public
+# identifiers. OAuth client ids (Google, Microsoft, Yahoo) and Entra/Azure
+# object, client and tenant ids are public identifiers, not secrets.
+title = "Secureddy"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-key"
+description = "Anthropic API key or OAuth access token"
+regex = '''sk-ant-(?:api|admin|oat)\d{2}-[A-Za-z0-9_\-]{20,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "google-oauth-client-secret"
+description = "Google OAuth client secret"
+regex = '''GOCSPX-[A-Za-z0-9_\-]{20,}'''
+keywords = ["GOCSPX-"]
+
+[allowlist]
+description = "Synthetic test data, reviewed by hand (see SECURITY.md)"
+paths = [
+  # builds fake keys at run time to test redaction
+  '''tests/unit/test_core_secrets\.py''',
+  # made-up magic-link and reset tokens in phishing fixtures and URL tests
+  '''tests/fixtures/emails/16_magic_link_from_popular_sender\.eml''',
+  '''tests/unit/analysis/test_(dynamic|policy|urls)\.py''',
+  '''__pycache__/''',
+]
+regexes = [
+  # an unreadable key used to test the "cannot be read" error
+  '''-----BEGIN PRIVATE KEY-----\\nnope\\n-----END PRIVATE KEY-----''',
+]

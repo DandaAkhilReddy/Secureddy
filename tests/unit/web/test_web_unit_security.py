@@ -130,15 +130,22 @@ class TestSessionHelpers:
     def test_login_rotates_and_logout_clears(self):
         request = make_request(session={"csrf": "old", "flash": [{"kind": "ok", "text": "hi"}], "oauth": {}})
         login_session(request, "usr_1", now=123.0)
-        assert request.session["uid"] == "usr_1" and request.session["iat"] == 123
+        assert request.session["iat"] == 123 and "uid" not in request.session  # the flow cookie names nobody
         assert request.session["csrf"] != "old" and "oauth" not in request.session
-        assert current_user_id(request) == "usr_1"
         logout_session(request)
-        assert request.session == {} and current_user_id(request) is None
+        assert request.session == {}
 
-    def test_current_user_id_ignores_non_strings(self):
-        assert current_user_id(make_request(session={"uid": 42})) is None
-        assert current_user_id(make_request(session={"uid": ""})) is None
+    def test_current_user_id_comes_from_the_server_session_only(self):
+        from reddysec.web.sessions import AuthContext
+
+        assert current_user_id(make_request(session={"uid": "usr_1"})) is None  # old-style cookie: ignored
+        request = make_request(session={})
+        request.scope["auth"] = AuthContext(session_id="h", handle="dev_1", user_id="usr_1")
+        assert current_user_id(request) == "usr_1"
+        request.scope["auth"] = AuthContext(session_id="h", handle="dev_1", user_id="")
+        assert current_user_id(request) is None
+        request.scope["auth"] = {"user_id": "usr_1"}  # anything else is not trusted
+        assert current_user_id(request) is None
 
     def test_flash_queue_is_bounded_and_popped_once(self):
         request = make_request(session={})

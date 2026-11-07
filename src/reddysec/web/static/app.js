@@ -19,6 +19,72 @@
     });
   });
 
+  // The browser's time zone, so "Today" and the day buckets on Home match the
+  // person's own day. A plain IANA name ("Europe/London"); the server checks it.
+  try {
+    var tz = window.Intl && Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && /^[A-Za-z0-9_+\-\/]{1,64}$/.test(tz) && document.cookie.indexOf("rs_tz=" + tz) === -1) {
+      document.cookie = "rs_tz=" + tz + "; Path=/; Max-Age=31536000; SameSite=Lax" +
+        (window.location.protocol === "https:" ? "; Secure" : "");
+    }
+  } catch (e) { /* no Intl: the server uses UTC */ }
+
+  // Appearance: apply the choice at once, then save it. "system" removes the
+  // attribute so the stylesheet follows prefers-color-scheme again.
+  document.querySelectorAll("input[data-theme-choice]").forEach(function (radio) {
+    radio.addEventListener("change", function () {
+      var root = document.documentElement;
+      if (radio.value === "system") { root.removeAttribute("data-theme"); } else { root.setAttribute("data-theme", radio.value); }
+      var meta = document.querySelector('meta[name="color-scheme"]');
+      if (meta) { meta.setAttribute("content", radio.value === "system" ? "dark light" : radio.value); }
+      if (radio.form) { radio.form.submit(); }
+    });
+  });
+
+  // Copy buttons (setup key, recovery codes): shown only when the clipboard works.
+  if (navigator.clipboard && window.isSecureContext !== false) {
+    document.querySelectorAll("button[data-copy]").forEach(function (button) {
+      button.hidden = false;
+      var label = button.querySelector("span");
+      var original = label ? label.textContent : "";
+      button.addEventListener("click", function () {
+        navigator.clipboard.writeText(button.getAttribute("data-copy") || "").then(function () {
+          if (label) {
+            label.textContent = "Copied";
+            window.setTimeout(function () { label.textContent = original; }, 2000);
+          }
+        }, function () { /* the key stays visible to type by hand */ });
+      });
+    });
+  }
+
+  // Segmented choices that save at once (Together / Separately).
+  document.querySelectorAll("input[data-autosubmit]").forEach(function (radio) {
+    radio.addEventListener("change", function () {
+      if (radio.form) { radio.form.submit(); }
+    });
+  });
+
+  // Search: Ctrl+K (Cmd+K on a Mac) or "/" focuses it; elsewhere it opens Email.
+  var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  document.querySelectorAll("[data-kbd]").forEach(function (kbd) { kbd.textContent = isMac ? "⌘K" : "Ctrl K"; });
+  var searchInput = document.getElementById("search-q");
+  if (searchInput && /[?&]focus=search\b/.test(window.location.search)) { searchInput.focus(); }
+  document.addEventListener("keydown", function (event) {
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((event.target && event.target.tagName) || "") ||
+      (event.target && event.target.isContentEditable);
+    var combo = (event.key === "k" || event.key === "K") && (event.metaKey || event.ctrlKey);
+    if (!combo && !(event.key === "/" && !typing)) { return; }
+    if (document.body.classList.contains("page-signin") || document.body.classList.contains("page-lock")) { return; }
+    event.preventDefault();
+    if (searchInput) {
+      searchInput.focus();
+      searchInput.select();
+    } else if (document.querySelector(".shell")) {
+      window.location.assign("/messages?focus=search");
+    }
+  });
+
   // Flash messages: dismiss on click, and fade out success notices by themselves.
   document.querySelectorAll("[data-flash]").forEach(function (flash) {
     var close = flash.querySelector("[data-flash-close]");

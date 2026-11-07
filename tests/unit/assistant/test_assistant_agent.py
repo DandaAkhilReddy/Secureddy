@@ -268,7 +268,11 @@ def test_context_window_keeps_last_turns():
 async def test_list_messages_filters(db, world):
     async with db.session() as s:
         tools = ToolBox(s, world["me"])
-        assert [m["verdict"] for m in (await tools.list_messages(level="quarantine"))["messages"]] == ["Quarantine"]
+        # "quarantine" is an old level name: it now means the Suspicious list, which includes moved email.
+        moved = (await tools.list_messages(level="quarantine"))["messages"]
+        assert [m["verdict"] for m in moved] == ["Suspicious", "Suspicious"]
+        assert sorted(m["moved_out_of_inbox"] for m in moved) == [False, True]
+        assert (await tools.list_messages(level="quarantine"))["filter"]["level"] == "suspicious"
         assert (await tools.list_messages(level="checked"))["count"] == 1
         assert (await tools.list_messages(sender="WALMART"))["count"] == 1
         assert (await tools.list_messages(sender="100%_"))["count"] == 0  # wildcards are escaped
@@ -281,7 +285,7 @@ async def test_stats_senders_signal_and_unknown_tool(db, world):
     async with db.session() as s:
         tools = ToolBox(s, world["me"])
         stats = await tools.get_stats(days=7)
-        assert (stats["suspicious"], stats["in_quarantine"], stats["checked_and_fine"]) == (1, 1, 1)
+        assert (stats["suspicious"], stats["moved_out_of_inbox"], stats["checked_and_fine"]) == (2, 1, 1)
         assert {e["untrusted"]["from_address"] for e in stats["top_flagged_senders"]} == {
             "orders@walmart-deliveries.net", "it@evil.example"}
         listed = json.loads((await tools.run("list_trusted_and_blocked", {"extra": 1})).content)

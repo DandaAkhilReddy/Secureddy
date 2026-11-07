@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -377,3 +378,136 @@ class MailboxTaskRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Accounts: sign-in sessions, app lock, passkeys, preferences
+#
+# New tables (not new columns) for the same ``create_all`` reason as
+# ``sender_feedback``: ``store.migrations`` creates them on existing databases.
+# ---------------------------------------------------------------------------
+
+
+class UserPreferenceRow(Base):
+    """Small per-person choices, key/value: "show my accounts together or
+    separately", the inbox picked in the "All inboxes" switch, and so on.
+    Keys and values come from fixed sets in ``web.preferences``."""
+
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_preference_key"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    key: Mapped[str] = mapped_column(String(40))
+    value: Mapped[str] = mapped_column(String(200), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserSessionRow(Base):
+    """One signed-in device. The browser holds a random 256-bit token; we keep
+    only its SHA-256 (``id``), so a database leak gives no working cookie.
+    ``handle`` is a short public name for the row (Settings → Devices).
+
+    Lifetimes: ``expires_at`` slides forward with use (90 days idle), capped by
+    ``absolute_expires_at`` (1 year after sign-in). ``revoked_at`` ends it at
+    once (sign out, sign out everywhere, a PIN or password change).
+
+    App lock state lives here too, on the server: ``unlocked_at`` is the last
+    full sign-in or PIN/passkey unlock (``None`` = locked) and
+    ``last_active_at`` drives the inactivity timeout.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(token) hex
+    handle: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    user_agent: Mapped[str] = mapped_column(String(120), default="")
+    ip_prefix: Mapped[str] = mapped_column(String(64), default="")
+    auth_method: Mapped[str] = mapped_column(String(20), default="")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str] = mapped_column(String(30), default="")
+    unlocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AppLockRow(Base):
+    """Optional app lock for one person: a 6-digit PIN or a password (argon2id)
+    and/or passkeys (``user_passkeys``), and how long the app may stay open
+    without use. Wrong answers are counted here, per person, so opening a new
+    session does not reset them."""
+
+    __tablename__ = "app_locks"
+
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), default="pin")  # pin | password | passkey
+    secret_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    timeout_s: Mapped[int] = mapped_column(Integer, default=300)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PasskeyRow(Base):
+    """A WebAuthn credential that can unlock the app (not sign in: signing in
+    is Google, Microsoft, Yahoo or a password). ``credential_id`` and
+    ``public_key`` are base64url as the authenticator produced them."""
+
+    __tablename__ = "user_passkeys"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    credential_id: Mapped[str] = mapped_column(Text)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(String(100), default="Passkey")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MfaStateRow(Base):
+    """Two-step sign-in bookkeeping for one person (the authenticator secret
+    itself is ``users.totp_secret_enc``). ``last_step`` is the 30-second time
+    step of the last code accepted, so the same code cannot be used twice;
+    wrong codes are counted per person over a 15-minute window."""
+
+    __tablename__ = "user_mfa"
+
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), primary_key=True)
+    last_step: Mapped[int] = mapped_column(BigInteger, default=0)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RecoveryCodeRow(Base):
+    """One single-use recovery code (argon2id hash only; shown once)."""
+
+    __tablename__ = "mfa_recovery_codes"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TrustedDeviceRow(Base):
+    """"Remember this device for 30 days": the browser holds a random token in
+    ``rs_mfa_dev``; we keep its SHA-256. ``session_id`` is the sign-in that
+    created it, so signing that device out forgets it too."""
+
+    __tablename__ = "mfa_trusted_devices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(token) hex
+    user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(64), default="")
+    user_agent: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

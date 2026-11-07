@@ -6,10 +6,12 @@ a client on a consumer laptop: a stolen cookie must expire, a malicious page
 must not be able to submit our forms, and a brute-force attempt against the
 sign-in page must stall.
 
-Sessions are *signed* cookies (itsdangerous), not encrypted ones. The payload
-holds only identifiers and short-lived flow state (an OAuth state token, a
-pending TOTP secret the user is about to confirm, flash messages); nothing in
-it is secret from the user whose browser holds it.
+Two cookies. ``rs_sid`` is the sign-in: an opaque token whose hash lives in
+``user_sessions`` (see :mod:`reddysec.web.sessions`), so a device can be
+signed out from the server. ``rs_session`` is a *signed* cookie
+(itsdangerous) for flow state only: the CSRF token, flash messages, an OAuth
+state token, a pending TOTP secret. It identifies nobody; nothing in it is
+secret from the user whose browser holds it.
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 SESSION_COOKIE = "rs_session"
 SESSION_MAX_AGE_S = 12 * 60 * 60
+# The flow cookie lives as long as a sign-in may (90 days idle), so an open
+# installed app keeps a valid CSRF token. It grants nothing on its own.
+FLOW_MAX_AGE_S = 90 * 24 * 60 * 60
 CSRF_FORM_FIELD = "csrf_token"
 CSRF_HEADER = "X-CSRF-Token"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
@@ -155,15 +160,17 @@ def new_token(nbytes: int = 32) -> str:
     return secrets.token_urlsafe(nbytes)
 
 
-def login_session(request: Request, user_id: str, *, now: float | None = None) -> None:
-    """Rotate the session on sign-in. A fresh dict (new CSRF token, new id, new
-    ``iat``) means a cookie captured before sign-in is worthless afterwards."""
+def login_session(request: Request, user_id: str = "", *, now: float | None = None) -> None:
+    """Rotate the flow cookie on sign-in. A fresh dict (new CSRF token, new
+    ``iat``) means a CSRF token captured before sign-in is worthless
+    afterwards. Who is signed in is decided by ``rs_sid`` only
+    (``auth.start_session``); ``user_id`` is accepted for older callers and
+    ignored."""
+    del user_id
     request.session.clear()
     request.session.update(
         {
-            "uid": user_id,
             "csrf": new_token(),
-            "sid": new_token(16),
             "iat": int(now if now is not None else time.time()),
         }
     )
@@ -174,8 +181,11 @@ def logout_session(request: Request) -> None:
 
 
 def current_user_id(request: Request) -> str | None:
-    uid = request.session.get("uid")
-    return uid if isinstance(uid, str) and uid else None
+    """The account ``rs_sid`` proved for this request (see web.sessions)."""
+    from .sessions import auth_of
+
+    auth = auth_of(request)
+    return auth.user_id if auth is not None and auth.user_id else None
 
 
 def flash(request: Request, text: str, kind: str = "ok") -> None:
@@ -410,6 +420,7 @@ __all__ = [
     "SECURITY_HEADERS",
     "SESSION_COOKIE",
     "SESSION_MAX_AGE_S",
+    "FLOW_MAX_AGE_S",
     "RateLimitMiddleware",
     "RateLimiter",
     "SecurityHeadersMiddleware",

@@ -20,17 +20,20 @@ broken model never becomes a 500 on the client's screen.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from reddysec.core.anthropic_auth import AnthropicAuthError, AnthropicCredentials, credentials_from_settings
 from reddysec.core.logging import get_logger
 
 log = get_logger(__name__)
 
 DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_MAX_TOKENS = 1024
+DEFAULT_ANTHROPIC_URL = "https://api.anthropic.com"
 
 
 class ChatError(Exception):
@@ -59,6 +62,11 @@ class ChatReply:
 
 @runtime_checkable
 class ChatModel(Protocol):
+    """``complete`` is required. A model may also offer
+    ``stream(system, messages, tools)``: an async iterator of text pieces that
+    ends with the whole :class:`ChatReply`; the agent uses it when present to
+    show the answer as it is written."""
+
     async def complete(
         self, system: str, messages: list[dict[str, Any]], tools: list[ToolSpec]
     ) -> ChatReply: ...
@@ -103,23 +111,31 @@ async def _post(http: httpx.AsyncClient, url: str, payload: dict[str, Any], head
 
 
 class AnthropicChat:
-    """Claude via ``POST /v1/messages`` with tool use."""
+    """Claude via ``POST /v1/messages`` with tool use.
+
+    ``credentials`` is an API key string or a
+    :class:`~reddysec.core.anthropic_auth.AnthropicCredentials` (keyless
+    Workload Identity Federation, or a key). With keyless credentials a 401
+    drops the cached token and the request is tried once more.
+    """
 
     def __init__(
         self,
         http: httpx.AsyncClient,
-        api_key: str,
+        credentials: str | AnthropicCredentials,
         model: str,
         *,
-        base_url: str = "https://api.anthropic.com",
+        base_url: str | None = None,
         api_version: str = "2023-06-01",
         timeout_s: float = DEFAULT_TIMEOUT_S,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> None:
         self._http = http
-        self._api_key = api_key
+        if isinstance(credentials, str):
+            credentials = AnthropicCredentials(api_key=credentials, base_url=base_url or DEFAULT_ANTHROPIC_URL)
+        self._credentials = credentials
         self._model = model
-        self._base_url = base_url.rstrip("/")
+        self._base_url = (base_url or credentials.base_url).rstrip("/")
         self._api_version = api_version
         self._timeout = timeout_s
         self._max_tokens = max_tokens
@@ -127,6 +143,10 @@ class AnthropicChat:
     @property
     def url(self) -> str:
         return f"{self._base_url}/v1/messages"
+
+    @property
+    def auth_mode(self) -> str:
+        return self._credentials.mode
 
     @staticmethod
     def to_wire(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -159,7 +179,7 @@ class AnthropicChat:
                 out.append({"role": wire_role, "content": blocks})
         return out
 
-    async def complete(self, system: str, messages: list[dict[str, Any]], tools: list[ToolSpec]) -> ChatReply:
+    def _payload(self, system: str, messages: list[dict[str, Any]], tools: list[ToolSpec]) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self._model,
             "max_tokens": self._max_tokens,
@@ -170,21 +190,134 @@ class AnthropicChat:
             payload["tools"] = [
                 {"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools
             ]
-        headers = {"x-api-key": self._api_key, "anthropic-version": self._api_version, "content-type": "application/json"}
-        data = await _post(self._http, self.url, payload, headers, self._timeout)
-        content = data.get("content")
-        if not isinstance(content, list):
-            raise ChatError("no content")
-        texts: list[str] = []
-        calls: list[ToolCall] = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "text":
-                texts.append(str(block.get("text", "")))
-            elif block.get("type") == "tool_use" and block.get("id") and block.get("name"):
-                calls.append(ToolCall(str(block["id"]), str(block["name"]), _arguments(block.get("input"))))
-        return ChatReply("".join(texts).strip(), tuple(calls))
+        return payload
+
+    async def _headers(self) -> dict[str, str]:
+        try:
+            auth = await self._credentials.headers()
+        except AnthropicAuthError as exc:
+            log.warning("assistant_llm_auth_failed", error=str(exc), status=exc.status)
+            raise ChatError("auth") from None
+        return {**auth, "anthropic-version": self._api_version, "content-type": "application/json"}
+
+    async def complete(self, system: str, messages: list[dict[str, Any]], tools: list[ToolSpec]) -> ChatReply:
+        payload = self._payload(system, messages, tools)
+        for attempt in range(2):
+            try:
+                data = await _post(self._http, self.url, payload, await self._headers(), self._timeout)
+                break
+            except ChatError as exc:
+                if str(exc) == "status 401" and self._credentials.keyless and attempt == 0:
+                    self._credentials.invalidate()
+                    continue
+                raise
+        return _anthropic_reply(data)
+
+    async def stream(
+        self, system: str, messages: list[dict[str, Any]], tools: list[ToolSpec]
+    ) -> AsyncIterator[str | ChatReply]:
+        """Server-sent events from the Messages API: yields text pieces as they
+        arrive and, last, the whole :class:`ChatReply` (text and tool calls)."""
+        payload = {**self._payload(system, messages, tools), "stream": True}
+        for attempt in range(2):
+            headers = await self._headers()
+            try:
+                async with self._http.stream(
+                    "POST", self.url, json=payload, headers=headers, timeout=self._timeout
+                ) as resp:
+                    if resp.status_code == 401 and self._credentials.keyless and attempt == 0:
+                        self._credentials.invalidate()
+                        continue
+                    if resp.status_code != 200:
+                        log.warning("assistant_llm_bad_status", status=resp.status_code)
+                        raise ChatError(f"status {resp.status_code}")
+                    async for item in _anthropic_events(resp):
+                        yield item
+                    return
+            except httpx.TimeoutException as exc:
+                log.warning("assistant_llm_timeout")
+                raise ChatError("timeout") from exc
+            except httpx.HTTPError as exc:
+                log.warning("assistant_llm_request_failed", error=type(exc).__name__)
+                raise ChatError("network") from exc
+        raise ChatError("status 401")  # pragma: no cover - the loop returns or raises
+
+
+def _anthropic_reply(data: dict[str, Any]) -> ChatReply:
+    content = data.get("content")
+    if not isinstance(content, list):
+        raise ChatError("no content")
+    texts: list[str] = []
+    calls: list[ToolCall] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            texts.append(str(block.get("text", "")))
+        elif block.get("type") == "tool_use" and block.get("id") and block.get("name"):
+            calls.append(ToolCall(str(block["id"]), str(block["name"]), _arguments(block.get("input"))))
+    return ChatReply("".join(texts).strip(), tuple(calls))
+
+
+async def _anthropic_events(resp: httpx.Response) -> AsyncIterator[str | ChatReply]:
+    """Parse the Messages API event stream into text deltas and a final reply."""
+    blocks: dict[int, dict[str, Any]] = {}
+    data_lines: list[str] = []
+
+    def handle(event: dict[str, Any]) -> str | None:
+        kind = event.get("type")
+        if kind == "error":
+            raise ChatError("stream error")
+        index = event.get("index")
+        if kind == "content_block_start" and isinstance(index, int):
+            block = event.get("content_block") or {}
+            blocks[index] = {"type": block.get("type"), "id": block.get("id"), "name": block.get("name"),
+                             "text": str(block.get("text") or ""), "json": ""}
+        elif kind == "content_block_delta" and isinstance(index, int):
+            delta = event.get("delta") or {}
+            block = blocks.setdefault(index, {"type": "text", "text": "", "json": ""})
+            if delta.get("type") == "text_delta":
+                piece = str(delta.get("text") or "")
+                block["text"] += piece
+                return piece
+            if delta.get("type") == "input_json_delta":
+                block["json"] += str(delta.get("partial_json") or "")
+        return None
+
+    async for line in resp.aiter_lines():
+        if line.startswith("data:"):
+            data_lines.append(line[5:].strip())
+            continue
+        if line.strip() or not data_lines:
+            continue
+        raw = "\n".join(data_lines)
+        data_lines = []
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            piece = handle(event)
+            if piece:
+                yield piece
+    if data_lines:  # a stream that ended without a blank line
+        try:
+            event = json.loads("\n".join(data_lines))
+        except ValueError:
+            event = None
+        if isinstance(event, dict):
+            piece = handle(event)
+            if piece:
+                yield piece
+    texts: list[str] = []
+    calls: list[ToolCall] = []
+    for index in sorted(blocks):
+        block = blocks[index]
+        if block.get("type") == "text":
+            texts.append(block["text"])
+        elif block.get("type") == "tool_use" and block.get("id") and block.get("name"):
+            calls.append(ToolCall(str(block["id"]), str(block["name"]), _arguments(block["json"] or "{}")))
+    yield ChatReply("".join(texts).strip(), tuple(calls))
 
 
 # --------------------------------------------------------------------------- OpenAI-shaped
@@ -299,10 +432,13 @@ def chat_model_from_settings(settings: Any, http: httpx.AsyncClient | None = Non
     provider = settings.effective_assistant_provider
     model = settings.effective_assistant_model
     if provider == "anthropic":
-        key = settings.anthropic_api_key.get_secret_value()
-        if not key or not model:
+        if not model:
             return None
-        return AnthropicChat(http or httpx.AsyncClient(), key, model)
+        http = http or httpx.AsyncClient()
+        credentials = credentials_from_settings(settings, http)
+        if credentials is None:
+            return None
+        return AnthropicChat(http, credentials, model)
     if provider == "azure_foundry":
         key = settings.azure_foundry_api_key.get_secret_value()
         if not key or not model or not settings.azure_foundry_endpoint:

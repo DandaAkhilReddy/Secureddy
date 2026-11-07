@@ -58,13 +58,16 @@ class TestChips:
         assert p.verdict_chip(message(state="pending", level=None)).label == "Checking"
         assert p.verdict_chip(message(state="analyzing", level=None)).tone == "grey"
         assert p.verdict_chip(message(state="failed", level=None)).label == "Could not check"
-        assert p.verdict_chip(message(level="malicious", quarantined=True)).label == "Quarantine"
+        assert p.verdict_chip(message(level="malicious", quarantined=True)) == p.Chip("Suspicious", "bad")
+        assert p.moved_chip(message(level="malicious", quarantined=True)) == p.Chip("Moved out of inbox", "grey")
+        assert p.moved_chip(message(level="suspicious")) is None
+        assert p.moved_chip(message(level="malicious", quarantined=True, state="restore_requested")) is None
         assert p.verdict_chip(message(level="safe")).label == "Checked"
         assert p.verdict_chip(message(level="suspicious")).tone == "warn"
         assert p.verdict_chip(message(level="weird")).label == "Could not check"
         restored = message(level="malicious", quarantined=True, state="restore_requested")
         assert (
-            p.verdict_chip(restored).label == "Quarantine"
+            p.verdict_chip(restored).label == "Suspicious"
         )  # the verdict stands even if the client overrode it
 
     def test_mailbox_chips(self):
@@ -116,20 +119,36 @@ class TestSentences:
         ("counts", "expected"),
         [
             (WeeklyCounts(0, 0, 0), "We have not seen any new email this week. Everything is quiet."),
-            (WeeklyCounts(1, 0, 0), "We checked 1 email this week. Nothing dangerous was found."),
-            (WeeklyCounts(42, 0, 1), "We checked 42 emails this week. 1 was dangerous and is in Quarantine."),
+            (WeeklyCounts(1, 0, 0), "We checked 1 email this week. Nothing looked suspicious."),
+            (WeeklyCounts(42, 1, 1), "We checked 42 emails this week. 1 looked suspicious. We moved it out of your inbox."),
             (
-                WeeklyCounts(42, 2, 3),
-                "We checked 42 emails this week. 3 were dangerous and are in Quarantine. 2 looked suspicious, so we marked them for care.",
+                WeeklyCounts(42, 5, 3),
+                "We checked 42 emails this week. 5 looked suspicious. We moved 3 out of your inbox.",
             ),
             (
-                WeeklyCounts(5, 1, 0),
-                "We checked 5 emails this week. 1 looked suspicious, so we marked it for care.",
+                WeeklyCounts(42, 3, 3),
+                "We checked 42 emails this week. 3 looked suspicious. We moved all of them out of your inbox.",
             ),
+            (WeeklyCounts(5, 1, 0), "We checked 5 emails this week. 1 looked suspicious."),
         ],
     )
     def test_weekly_sentence(self, counts, expected):
         assert p.weekly_sentence(counts, has_mailboxes=True) == expected
+
+    @pytest.mark.parametrize(
+        ("period", "expected"),
+        [
+            ("today", "We checked 120 emails today. 3 looked suspicious."),
+            ("7d", "We checked 120 emails this week. 3 looked suspicious."),
+            ("1m", "We checked 120 emails this month. 3 looked suspicious."),
+            ("1y", "We checked 120 emails this year. 3 looked suspicious."),
+            ("bogus", "We checked 120 emails this week. 3 looked suspicious."),
+        ],
+    )
+    def test_sentence_follows_the_period(self, period, expected):
+        assert p.weekly_sentence(WeeklyCounts(120, 3, 0, 117), has_mailboxes=True, period=period) == expected
+        assert p.weekly_sentence(WeeklyCounts(), has_mailboxes=True, period="today") == (
+            "We have not seen any new email today. Everything is quiet.")
 
     def test_weekly_sentence_without_mailboxes(self):
         assert p.weekly_sentence(WeeklyCounts(), has_mailboxes=False).startswith("Connect a mailbox")
@@ -163,7 +182,7 @@ class TestAuditCopy:
         assert p.detail_phrase(entry("mode_changed", **{"from": "scan", "to": "hold"})) == "Scan to Hold"
         assert (
             p.detail_phrase(entry("verdict_override", **{"from": "safe", "to": "malicious"}))
-            == "Checked to Quarantine"
+            == "Checked to Suspicious"
         )
         assert p.detail_phrase(entry("review_requested", note="Looks odd")) == "Looks odd"
         assert p.detail_phrase(entry("review_requested")) == ""

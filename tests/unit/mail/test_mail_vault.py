@@ -32,11 +32,11 @@ class TestVault:
         vault = CredentialVault(TokenCipher({"k1": os.urandom(32)}, "k1"))
         mailbox_id = await _mailbox(db)
         async with db.session() as s:
-            row = await vault.store(s, mailbox_id, KIND_GOOGLE_OAUTH, {"refresh_token": "r1", "n": 1})
+            row = await vault.store(s, mailbox_id, KIND_GOOGLE_OAUTH, {"refresh_token": "refresh-r1", "n": 1})
             assert row.key_id == "k1" and row.ciphertext.startswith("v1.k1.")
-            assert "r1" not in row.ciphertext
+            assert "refresh-r1" not in row.ciphertext  # (a 2-letter needle matched random base64 now and then)
         async with db.session() as s:
-            assert await vault.load(s, mailbox_id) == (KIND_GOOGLE_OAUTH, {"refresh_token": "r1", "n": 1})
+            assert await vault.load(s, mailbox_id) == (KIND_GOOGLE_OAUTH, {"refresh_token": "refresh-r1", "n": 1})
             await vault.store(s, mailbox_id, KIND_IMAP_PASSWORD, {"username": "u", "password": "p"})
         async with db.session() as s:
             kind, secret = await vault.load(s, mailbox_id)

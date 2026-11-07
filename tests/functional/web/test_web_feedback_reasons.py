@@ -127,10 +127,12 @@ async def test_dashboard_hero_sparklines_and_chip_icons(client, seed, login):
     login(client, "dash@example.com")
     page = client.get("/").text
     assert "1 email needs a look" in page and "hero-warn" in page
-    assert page.count('<svg class="spark"') == 3 and 'aria-label="Last 7 days: ' in page
+    assert page.count('<svg class="spark"') == 2 and 'aria-label="Last 7 days: ' in page
     assert '<polyline class="spark-line" points="' in page
     assert '<span class="chip tone-warn"><svg class="chip-ico"' in page
-    assert "Why was my Walmart email flagged?" in page and 'action="/assistant/send"' in page
+    # Suggestions are built from the person's own mail (seeded senders are sender<n>@example.net).
+    assert "1 email needs a look. Show it" in page and "Search my Example emails" in page
+    assert 'action="/assistant/send"' in page
 
 
 async def test_dashboard_quiet_hero(client, seed, login):

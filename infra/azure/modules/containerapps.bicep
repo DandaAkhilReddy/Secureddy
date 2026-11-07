@@ -123,6 +123,29 @@ param llmProvider string = ''
 @description('RS_ASSISTANT_PROVIDER for "Ask Secureddy": empty follows RS_LLM_PROVIDER.')
 param assistantProvider string = ''
 
+@description('Claude model for the in-app assistant.')
+param assistantModel string = 'claude-sonnet-5-5'
+
+@description('Claude model for the background fraud reviewer.')
+param anthropicModel string = 'claude-haiku-5-5'
+
+// Keyless Claude (Workload Identity Federation): identifiers only, never
+// secrets. When the rule, organization and service account are set, the apps
+// trade their managed identity's Entra token for a short-lived Claude token
+// and RS_ANTHROPIC_API_KEY is not needed (set anthropicEnabled=false).
+@description('Anthropic federation rule (fdrl_...) matching the web app identity (oid).')
+param anthropicWebFederationRuleId string = ''
+@description('Anthropic federation rule (fdrl_...) matching the worker identity (oid).')
+param anthropicWorkerFederationRuleId string = ''
+@description('Anthropic organization id (UUID).')
+param anthropicOrganizationId string = ''
+@description('Anthropic service account (svac_...) the rules mint tokens for.')
+param anthropicServiceAccountId string = ''
+@description('Anthropic workspace (wrkspc_...); needed when a rule covers several workspaces.')
+param anthropicWorkspaceId string = ''
+@description('Audience the managed identities request an Entra token for: api://<Entra app id>.')
+param anthropicWifAudience string = ''
+
 @description('KEK rotation: Key Vault version id of the PREVIOUS rs-token-kek. While set, the apps get it as RS_TOKEN_KEK_PREVIOUS so old ciphertexts still decrypt. Empty = single key.')
 param tokenKekPreviousVersion string = ''
 
@@ -254,7 +277,17 @@ var azureOpenAiEnv = azureOpenAiEnabled
   : [{ name: 'RS_LLM_PROVIDER', value: empty(llmProvider) ? 'none' : llmProvider }]
 
 var assistantEnv = concat(
-  [{ name: 'RS_ASSISTANT_PROVIDER', value: assistantProvider }],
+  [
+    { name: 'RS_ASSISTANT_PROVIDER', value: assistantProvider }
+    { name: 'RS_ASSISTANT_MODEL', value: assistantModel }
+    { name: 'RS_ANTHROPIC_MODEL', value: anthropicModel }
+  ],
+  [
+    { name: 'RS_ANTHROPIC_ORGANIZATION_ID', value: anthropicOrganizationId }
+    { name: 'RS_ANTHROPIC_SERVICE_ACCOUNT_ID', value: anthropicServiceAccountId }
+    { name: 'RS_ANTHROPIC_WORKSPACE_ID', value: anthropicWorkspaceId }
+    { name: 'RS_ANTHROPIC_WIF_AUDIENCE', value: anthropicWifAudience }
+  ],
   anthropicEnabled ? [{ name: 'RS_ANTHROPIC_API_KEY', secretRef: 'rs-anthropic-api-key' }] : []
 )
 
@@ -419,6 +452,8 @@ resource web 'Microsoft.App/containerApps@2025-07-01' = {
           resources: { cpu: 1, memory: '2Gi' }
           env: concat(commonEnv, optionalEnv, [
             { name: 'AZURE_CLIENT_ID', value: webClientId }
+            { name: 'RS_AZURE_IDENTITY_CLIENT_ID', value: webClientId }
+            { name: 'RS_ANTHROPIC_FEDERATION_RULE_ID', value: anthropicWebFederationRuleId }
             { name: 'RS_SANDBOX_BACKEND', value: 'aci' }
             { name: 'RS_READING_ROOM_MAX_SESSIONS', value: '10' }
           ])
@@ -469,6 +504,8 @@ resource worker 'Microsoft.App/containerApps@2025-07-01' = {
           resources: { cpu: 1, memory: '2Gi' }
           env: concat(commonEnv, optionalEnv, [
             { name: 'AZURE_CLIENT_ID', value: workerClientId }
+            { name: 'RS_AZURE_IDENTITY_CLIENT_ID', value: workerClientId }
+            { name: 'RS_ANTHROPIC_FEDERATION_RULE_ID', value: anthropicWorkerFederationRuleId }
             { name: 'RS_SANDBOX_BACKEND', value: 'aci' }
             { name: 'RS_DETONATION_TIMEOUT_S', value: string(detonationTimeoutSeconds) }
             { name: 'RS_DETONATION_MAX_CONCURRENCY', value: string(detonationMaxConcurrency) }

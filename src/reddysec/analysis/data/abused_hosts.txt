@@ -1,0 +1,84 @@
+# Free hosting, developer and "build a site in a minute" platforms that
+# phishing kits use because they are free, get HTTPS automatically and borrow
+# a trusted brand's reputation (docs/threat-catalog.md, "Abuse of legitimate
+# services"). Being listed is NOT an accusation: millions of real sites live
+# here. On its own a link to one of these is worth a few points; a sign-in
+# form or a brand's name on such a page is what makes it serious.
+#
+# One entry per line: a host suffix ("pages.dev" matches "x.pages.dev") or a
+# host plus path prefix ("docs.google.com/forms"). '#' starts a comment.
+# Cloudflare developer platforms
+workers.dev
+pages.dev
+r2.dev
+trycloudflare.com
+cloudflare-ipfs.com
+# Google / Firebase
+firebaseapp.com
+web.app
+firebasestorage.googleapis.com
+storage.googleapis.com
+appspot.com
+script.google.com
+sites.google.com
+docs.google.com/forms
+docs.google.com/drawings
+docs.google.com/presentation/d/e
+forms.gle
+translate.goog
+# Microsoft Azure storage and app hosting
+blob.core.windows.net
+web.core.windows.net
+azurewebsites.net
+azurestaticapps.net
+azureedge.net
+# IPFS gateways
+ipfs.io
+dweb.link
+w3s.link
+nftstorage.link
+4everland.io
+fleek.co
+# Developer hosting and tunnels
+github.io
+githubusercontent.com
+vercel.app
+netlify.app
+onrender.com
+herokuapp.com
+replit.dev
+repl.co
+glitch.me
+surge.sh
+ngrok-free.app
+ngrok.io
+ngrok.app
+loca.lt
+serveo.net
+pythonanywhere.com
+amplifyapp.com
+s3.amazonaws.com
+# Site builders and no-code pages
+canva.site
+my.canva.site
+notion.site
+webflow.io
+wixsite.com
+wixstudio.io
+weebly.com
+weeblysite.com
+000webhostapp.com
+godaddysites.com
+square.site
+jimdosite.com
+mystrikingly.com
+framer.app
+framer.website
+carrd.co
+glide.page
+bubbleapps.io
+softr.app
+typedream.app
+gitbook.io
+# File sharing pages used as a stepping stone
+dl.dropboxusercontent.com

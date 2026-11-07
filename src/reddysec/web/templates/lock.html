@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf, icon, brand_mark with context %}
+{% block title %}Locked · Secureddy{% endblock %}
+{% block body_class %}page-lock{% endblock %}
+{% block content %}
+<section class="lock" aria-labelledby="lock-title" data-lock data-kind="{{ kind }}">
+  <div class="signin-mark">{{ brand_mark("signin-shield") }}</div>
+  <h1 class="lock-title" id="lock-title">Secureddy is locked</h1>
+  <p class="muted lock-who">{{ lock_user.display_name }}</p>
+
+  {% if error %}<p class="flash flash-error lock-error" role="alert">{{ error }}</p>{% endif %}
+
+  {% if cooldown_minutes %}
+  <p class="flash flash-warn" role="status">Too many wrong tries. You can try again in {{ cooldown_minutes }} minute{{ "s" if cooldown_minutes != 1 }}, or sign in again below.</p>
+  {% elif has_secret %}
+  <form method="post" action="/lock" class="lock-form" data-lock-form autocomplete="off">
+    {{ csrf() }}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    {% if kind == "pin" %}
+    <label class="sr-only" for="lock-secret">Your 6-digit PIN</label>
+    <div class="pin-dots" aria-hidden="true" data-pin-dots><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    <input class="input input-code lock-input" id="lock-secret" name="secret" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required autofocus data-pin-input>
+    <div class="pin-pad" data-pin-pad hidden>
+      {% for d in ("1", "2", "3", "4", "5", "6", "7", "8", "9") %}
+      <button type="button" class="pin-key" data-digit="{{ d }}">{{ d }}</button>
+      {% endfor %}
+      {% if has_passkeys %}<button type="button" class="pin-key pin-key-alt" data-passkey aria-label="Use your passkey">{{ icon("fingerprint", "ico") }}</button>{% else %}<span></span>{% endif %}
+      <button type="button" class="pin-key" data-digit="0">0</button>
+      <button type="button" class="pin-key pin-key-alt" data-back aria-label="Delete the last digit">{{ icon("x", "ico") }}</button>
+    </div>
+    <button class="btn btn-primary btn-block" type="submit" data-pin-submit>Unlock</button>
+    {% else %}
+    <label class="field"><span>Your password</span>
+      <input class="input" name="secret" type="password" autocomplete="current-password" required autofocus>
+    </label>
+    <button class="btn btn-primary btn-block" type="submit">Unlock</button>
+    {% endif %}
+  </form>
+  {% endif %}
+
+  {% if has_passkeys and not cooldown_minutes %}
+  <form method="post" action="/lock/passkey" class="lock-passkey" data-passkey-form>
+    {{ csrf() }}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <button class="btn {{ 'btn-quiet' if has_secret else 'btn-primary' }} btn-block" type="button" data-passkey>{{ icon("fingerprint") }}<span>Unlock with passkey</span></button>
+    <p class="muted small lock-passkey-msg" data-passkey-msg role="status"></p>
+  </form>
+  {% endif %}
+
+  {% if has_totp %}
+  <details class="signin-other lock-totp"{% if not has_secret and not has_passkeys %} open{% endif %}>
+    <summary>Use your authenticator app</summary>
+    <form method="post" action="/lock/totp" class="stack signin-form" autocomplete="off">
+      {{ csrf() }}
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <label class="field"><span>6-digit code from your app</span>
+        <input class="input input-code mfa-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required>
+      </label>
+      <button class="btn btn-quiet btn-block" type="submit">Unlock with code</button>
+    </form>
+  </details>
+  {% endif %}
+
+  <div class="lock-foot">
+    <form method="post" action="/lock/forgot">
+      {{ csrf() }}
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <button class="btn btn-ghost btn-small" type="submit">Forgot {{ "PIN" if kind == "pin" else "password" }}? Sign in again</button>
+    </form>
+    <form method="post" action="/auth/logout">
+      {{ csrf() }}
+      <button class="btn btn-ghost btn-small" type="submit">Sign out</button>
+    </form>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="/static/lock.js?v={{ asset_version }}" defer></script>{% endblock %}

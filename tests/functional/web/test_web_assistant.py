@@ -55,7 +55,8 @@ async def test_page_renders_with_suggestions_and_nav(client, seed, login):
     await _world(seed, login, client)
     page = client.get("/assistant")
     assert page.status_code == 200
-    assert "What&#39;s suspicious this week?" in page.text and 'id="composer"' in page.text
+    # Suggestions fit the person's own mail: one suspicious email this week.
+    assert "1 email needs a look. Show it" in page.text and 'id="composer"' in page.text
     assert 'href="/assistant" aria-current="page"' in page.text
     assert re.search(r'<script src="/static/assistant.js\?v=[0-9a-f]{10}" defer></script>', page.text)
     assert "innerHTML" not in client.get("/static/assistant.js").text

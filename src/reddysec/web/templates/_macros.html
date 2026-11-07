@@ -47,6 +47,40 @@
 <path d="M9 6l6 6-6 6"/>
 {%- elif name == "key" -%}
 <circle cx="8" cy="15" r="4"/><path d="M11 12l9-9"/><path d="M16 7l3 3"/>
+{%- elif name == "copy" -%}
+<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/>
+{%- elif name == "qr" -%}
+<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2z"/><path d="M18 18h2v2h-2z"/><path d="M18 14h2"/><path d="M14 18v2"/>
+{%- elif name == "search" -%}
+<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>
+{%- elif name == "archive" -%}
+<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9"/><path d="M10 13h4"/>
+{%- elif name == "trash" -%}
+<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>
+{%- elif name == "eye" -%}
+<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>
+{%- elif name == "eye-off" -%}
+<path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0112 5c6.5 0 10 7 10 7a17 17 0 01-3.2 4.2"/><path d="M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 005.4-1.6"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/>
+{%- elif name == "phone" -%}
+<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>
+{%- elif name == "laptop" -%}
+<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>
+{%- elif name == "logout" -%}
+<path d="M15 4h4v16h-4"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/>
+{%- elif name == "external" -%}
+<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>
+{%- elif name == "reply" -%}
+<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 015 5v6"/>
+{%- elif name == "stop" -%}
+<rect x="6" y="6" width="12" height="12" rx="2"/>
+{%- elif name == "link" -%}
+<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1.2-1.2"/>
+{%- elif name == "pause" -%}
+<path d="M9 5v14"/><path d="M15 5v14"/>
+{%- elif name == "play" -%}
+<path d="M7 5l12 7-12 7z"/>
+{%- elif name == "fingerprint" -%}
+<path d="M12 11v3a6 6 0 01-1.5 4"/><path d="M8.5 9.5A4 4 0 0116 11v2"/><path d="M5 12a7 7 0 0114-1"/><path d="M15.5 16.5c.3-1 .5-2.1.5-3.5"/><path d="M8 13c0 2-.6 3.6-1.6 5"/>
 {%- elif name == "sun" -%}
 <circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.9 4.9l1.4 1.4"/><path d="M17.7 17.7l1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M4.9 19.1l1.4-1.4"/><path d="M17.7 6.3l1.4-1.4"/>
 {%- else -%}
@@ -184,7 +218,7 @@
       </label>
       <div class="decide-submit">
         <button class="btn btn-danger-solid btn-small" type="submit">Mark as fake</button>
-        <span class="help">Their email goes to Quarantine from now on.</span>
+        <span class="help">Their email is moved out of your inbox from now on.</span>
       </div>
     </form>
   </details>
@@ -241,4 +275,63 @@
 <path class="ea-soft" d="M16 70h88"/><path d="M24 40h22l5 9h18l5-9h22"/><path d="M34 14h52l12 26v22H22V40z"/><path class="ea-accent" d="M50 28h20"/>
 {%- endif -%}
 </svg>
+{%- endmacro %}
+
+
+{# "All inboxes · a@x · b@y": the inbox switch on Home and Email. Plain links, works without JS. #}
+{% macro inbox_switch(items, label="Show email from") -%}
+{% if items | length > 2 %}
+<nav class="inbox-switch" aria-label="{{ label }}">
+  <ul role="list">
+    {% for it in items %}
+    <li><a class="inbox-pill" href="{{ it.href }}"{% if it.current %} aria-current="true"{% endif %}>{% if it.provider %}{{ provider_logo(PROVIDER_LOGOS.get(it.provider, "other")) }}{% else %}{{ icon("inbox", "ico") }}{% endif %}<span>{{ it.label }}</span></a></li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endif %}
+{%- endmacro %}
+
+{# Today · 7 days · 1 month · 1 year. Plain links, so it works without scripts. #}
+{% macro period_switch(items, label="Show the numbers for") -%}
+<nav class="period-switch" aria-label="{{ label }}">
+  <ul role="list">
+    {% for it in items %}
+    <li><a class="period-pill" href="{{ it.href }}"{% if it.current %} aria-current="true"{% endif %}>{{ it.label }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
+{%- endmacro %}
+
+{# Small "which account" tag on a message row. #}
+{% macro account_tag(mailbox) -%}
+<span class="acct-tag" title="{{ mailbox.address }}">{{ provider_logo(PROVIDER_LOGOS.get(mailbox.provider, "other")) }}<span>{{ mailbox.address }}</span></span>
+{%- endmacro %}
+
+{# An assistant result card (server-rendered copy of what assistant.js draws). #}
+{% macro chat_card(c) -%}
+<div class="ccard ccard-{{ c.kind }}" data-card>
+  {% if c.title %}<p class="ccard-title">{{ c.title }}</p>{% endif %}
+  {% if c.kind == "link" %}
+  <div class="ccard-link">
+    <span class="chip tone-{{ c.chip.tone }}"><span>{{ c.chip.label }}</span></span>
+    <code class="url-text">{{ c.url }}</code>
+    <p class="muted small">{{ c.text }}{% if c.reason %} {{ c.reason }}{% endif %}</p>
+    {% if c.downloads %}<p class="muted small">{{ c.downloads }}</p>{% endif %}
+    <a class="link" href="{{ c.href }}">Open the report</a>
+  </div>
+  {% elif c.kind == "accounts" %}
+  <ul class="ccard-rows" role="list">
+    {% for r in c.rows %}
+    <li><a class="ccard-row" href="{{ r.href }}">{{ provider_logo(PROVIDER_LOGOS.get(r.provider, "other")) }}<span class="ccard-main"><strong>{{ r.address }}</strong><span class="muted small">{{ r.checked }} checked · {{ r.flagged }} flagged this week</span></span><span class="chip tone-{{ r.chip.tone }}"><span>{{ r.chip.label }}</span></span></a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <ol class="ccard-rows{% if c.kind == 'ranked' %} ccard-ranked{% endif %}" role="list">
+    {% for r in c.rows %}
+    <li><a class="ccard-row" href="{{ r.href }}">{% if r.rank %}<span class="ccard-rank">{{ r.rank }}</span>{% endif %}<span class="ccard-main"><strong>{{ r.from }}</strong><span class="ccard-subject">{{ r.subject }}</span><span class="muted small">{{ r.reason }}{% if r.account %} · {{ r.account }}{% endif %} · {{ r.when }}</span></span><span class="chip tone-{{ r.chip.tone }}"><span>{{ r.chip.label }}</span></span></a></li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  {% if c.more_href %}<a class="link ccard-more" href="{{ c.more_href }}">See all</a>{% endif %}
+</div>
 {%- endmacro %}

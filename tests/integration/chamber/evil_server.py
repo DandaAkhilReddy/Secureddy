@@ -23,6 +23,27 @@ Routes (primary):
     /dialog              alert() on load (dialogs must not hang the chamber)
     /popup               window.open() of /benign
     /beacon*, /collect   sinks; every hit is recorded in ``hits``
+
+Lure pages (docs/threat-catalog.md):
+
+    /clickfix            fake reCAPTCHA checkbox; click copies `powershell -w hidden -enc ...`
+                         and shows "Windows + R, Ctrl + V, Enter"
+    /clickfix-exec       fake "Word Online" error; "How to fix" copies an mshta command with
+                         textarea + execCommand('copy'); Win + X -> Terminal instructions
+    /filefix             FileFix: copy event puts PowerShell padded behind a fake file path;
+                         "File Explorer, address bar, Ctrl + V"
+    /macos-terminal      Cmd + Space, Terminal, paste `bash -c "$(curl ...)"`
+    /fake-captcha        "I'm not a robot" + Win + R steps, nothing on the clipboard
+    /dev-docs            negative: install docs with PowerShell/curl snippets and a Copy button
+    /real-captcha        negative: a sign-up form with a (stand-in) reCAPTCHA widget
+    /turnstile-login     fake Turnstile gate that reveals a Microsoft sign-in form, proxied
+                         Microsoft asset paths, debugger loop
+    /device-code         "go to microsoft.com/devicelogin and enter GHK7-PQ2X"
+    /tech-support        full screen, keyboard lock, alert loop, "Call Microsoft Support"
+    /wallet              airdrop page; "Connect Wallet" calls eth_requestAccounts; seed phrase box
+    /notify              Notification.requestPermission() on load
+    /open-redirect       ?u=<url> 302 to <url> (l.php-style open redirect)
+    /dl/iso /dl/lnk /dl/msi /dl/locked-zip /dl/invoice-pdf   downloads of each kind
 """
 
 from __future__ import annotations
@@ -72,6 +93,63 @@ def render_fixture(name: str, **values: str) -> str:
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     return text
+
+
+_LURE_PAGES: dict[str, str] = {
+    "/clickfix": "clickfix.html",
+    "/clickfix-exec": "clickfix-execcommand.html",
+    "/filefix": "filefix.html",
+    "/macos-terminal": "macos-terminal.html",
+    "/fake-captcha": "fake-captcha-no-payload.html",
+    "/dev-docs": "dev-docs.html",
+    "/real-captcha": "real-captcha.html",
+    "/turnstile-login": "turnstile-login.html",
+    "/device-code": "device-code.html",
+    "/tech-support": "tech-support.html",
+    "/wallet": "wallet.html",
+    "/notify": "notify.html",
+}
+
+
+def iso_image() -> bytes:
+    """Smallest thing that sniffs as ISO 9660: the CD001 volume descriptor at 0x8001."""
+    data = bytearray(0x8800)
+    data[0x8000] = 1
+    data[0x8001:0x8006] = b"CD001"
+    return bytes(data)
+
+
+def lnk_file() -> bytes:
+    return b"L\x00\x00\x00\x01\x14\x02\x00\x00\x00\x00\x00\xc0\x00\x00\x00\x00\x00\x00\x46" + b"\x00" * 200
+
+
+def msi_file() -> bytes:
+    return b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 504
+
+
+def locked_zip(entry: str = "Invoice_2026.js") -> bytes:
+    """A ZIP whose entry is flagged as encrypted (ZipCrypto). The bytes are not
+    really encrypted; the listing is what the chamber reads."""
+    import struct
+    import zlib
+
+    name = entry.encode()
+    body = b"\x00" * 12 + b"WScript.Echo(1)"  # 12-byte ZipCrypto header + data
+    crc = zlib.crc32(b"WScript.Echo(1)")
+    flags = 0x1
+    local = struct.pack("<IHHHHHIIIHH", 0x04034B50, 20, flags, 0, 0, 0, crc, len(body), 15, len(name), 0) + name + body
+    central = struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 20, 20, flags, 0, 0, 0, crc, len(body), 15, len(name), 0, 0, 0, 0, 0, 0) + name
+    end = struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, 1, 1, len(central), len(local), 0)
+    return local + central + end
+
+
+_DOWNLOADS: dict[str, object] = {
+    "/dl/iso": lambda: ("Invoice_2026.iso", "application/octet-stream", iso_image()),
+    "/dl/lnk": lambda: ("Statement.pdf.lnk", "application/octet-stream", lnk_file()),
+    "/dl/msi": lambda: ("ChromeUpdate.msi", "application/x-msi", msi_file()),
+    "/dl/locked-zip": lambda: ("Invoice_2026.zip", "application/zip", locked_zip()),
+    "/dl/invoice-pdf": lambda: ("invoice.pdf", "application/pdf", b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"),
+}
 
 
 class EvilSite:
@@ -220,6 +298,21 @@ class _EvilHandler(BaseHTTPRequestHandler):
             self._send(b"<!doctype html><html><head><title>Dialog</title></head><body><script>alert('are you there?')</script><p>after the alert</p></body></html>")
         elif path == "/popup":
             self._send(b"<!doctype html><html><head><title>Popup</title></head><body><script>window.open('/benign')</script><p>popup page</p></body></html>")
+        elif path in _LURE_PAGES:
+            self._page(_LURE_PAGES[path])
+        elif path == "/open-redirect":
+            from urllib.parse import parse_qs
+
+            target = parse_qs(urlsplit(self.path).query).get("u", [""])[0]
+            self._redirect(target or "/benign")
+        elif path in _DOWNLOADS:
+            name, content_type, body = _DOWNLOADS[path]()
+            self._send(body, content_type=content_type, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        elif path == "/static/recaptcha/api.js":
+            self._send(b"/* recaptcha stand-in */", content_type="application/javascript")
+        elif path.startswith("/shared/1.0/content/"):
+            self._send(PIXEL_PNG if path.endswith((".png", ".svg")) else b"/* proxied asset */",
+                       content_type="image/png" if path.endswith((".png", ".svg")) else "application/javascript")
         elif path.startswith("/beacon") or path == "/collect":
             self._send(b"", 204, content_type="text/plain")
         elif path == "/static/pixel.png" or path == "/static/logo.png":

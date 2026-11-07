@@ -17,7 +17,7 @@ SandboxBackendName = Literal["local", "docker", "aci"]
 LlmProvider = Literal["none", "anthropic", "azure_foundry", "azure_openai", "openai"]
 # "" means "follow llm_provider" (and "none" when that is unset too).
 AssistantProvider = Literal["", "none", "anthropic", "azure_foundry", "azure_openai"]
-DEFAULT_ASSISTANT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
+DEFAULT_ASSISTANT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
 
 
 class Settings(BaseSettings):
@@ -99,7 +99,21 @@ class Settings(BaseSettings):
     # deployment. None of them is ever the only reason for a verdict.
     llm_provider: LlmProvider = "none"
     anthropic_api_key: SecretStr = SecretStr("")
-    anthropic_model: str = "claude-haiku-4-5"
+    anthropic_model: str = "claude-haiku-5-5"
+    anthropic_base_url: str = "https://api.anthropic.com"
+    # Keyless Claude: Workload Identity Federation. When the rule, organization
+    # and service account ids are all set, the app exchanges a short-lived
+    # Microsoft Entra token from its managed identity for a short-lived Claude
+    # token (core.anthropic_auth) and RS_ANTHROPIC_API_KEY is not needed. These
+    # are identifiers, not secrets. See docs/claude-keyless-setup.md.
+    anthropic_federation_rule_id: str = ""  # fdrl_...
+    anthropic_organization_id: str = ""  # organization UUID
+    anthropic_service_account_id: str = ""  # svac_...
+    anthropic_workspace_id: str = ""  # wrkspc_... (needed when the rule covers several workspaces)
+    anthropic_wif_audience: str = ""  # api://<Entra app id> the managed identity asks a token for
+    # Client id of the user-assigned managed identity (Container Apps). Empty =
+    # the system-assigned identity.
+    azure_identity_client_id: str = ""
     azure_foundry_endpoint: str = ""  # https://<resource>.services.ai.azure.com
     azure_foundry_api_key: SecretStr = SecretStr("")
     azure_foundry_model: str = ""
@@ -109,12 +123,28 @@ class Settings(BaseSettings):
 
     # --- "Ask Secureddy" in-app assistant ---------------------------------
     # Reuses the keys above. Empty provider = follow llm_provider. The model
-    # defaults per provider: claude-sonnet-4-5 for Anthropic, the Foundry model
+    # defaults per provider: claude-sonnet-5-5 for Anthropic, the Foundry model
     # or the Azure OpenAI deployment otherwise.
     assistant_provider: AssistantProvider = ""
     assistant_model: str = ""
     assistant_max_turns: int = 6  # tool rounds per question
     assistant_daily_message_limit: int = 200  # questions per user per UTC day
+    # "Let the assistant read this email": at most this much plain text of one
+    # email is sent, only after the person clicks the button for that email.
+    assistant_read_email_max_chars: int = 6000
+
+    # --- signed-in devices and app lock ----------------------------------
+    # A device stays signed in until the person signs out: the session slides
+    # forward with use and ends after this many idle days, or this many days
+    # after sign-in whatever happens.
+    session_idle_days: int = 90
+    session_absolute_days: int = 365
+
+    # --- reading mail inside Secureddy ----------------------------------
+    # "Load images" fetches remote images through our server, at most this big.
+    image_proxy_max_bytes: int = 5 * 1024 * 1024
+    # "Search inside emails" asks each provider and waits at most this long.
+    live_search_timeout_s: float = 8.0
 
     # --- hold mode safety ------------------------------------------------
     # If the pipeline has not heart-beaten for this long, release all held mail.
@@ -175,8 +205,33 @@ class Settings(BaseSettings):
         }.get(self.effective_assistant_provider, "")
 
     @property
+    def anthropic_wif_enabled(self) -> bool:
+        """Keyless Claude is on when its three required ids are set."""
+        return bool(
+            self.anthropic_federation_rule_id and self.anthropic_organization_id and self.anthropic_service_account_id
+        )
+
+    @property
+    def anthropic_configured(self) -> bool:
+        return self.anthropic_wif_enabled or bool(self.anthropic_api_key.get_secret_value())
+
+    @property
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+    def __repr_args__(self):  # type: ignore[override]
+        """``repr(settings)`` (tracebacks, debuggers, a stray print) shows every
+        secret as ``**********`` (SecretStr) and masks credentials embedded in
+        URLs, such as a database password."""
+        from reddysec.core.redact import MASK, is_secret_key, redact_text
+
+        for name, value in super().__repr_args__():
+            if isinstance(value, str) and name and is_secret_key(name):
+                yield name, (MASK if value else value)
+            elif isinstance(value, str):
+                yield name, redact_text(value)
+            else:
+                yield name, value
 
 
 @lru_cache(maxsize=1)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pyotp
 from fastapi import Depends
 from sqlalchemy import delete, select
 from starlette.testclient import TestClient
@@ -36,21 +35,21 @@ async def test_get_principal_id_dependency_for_the_reading_room(settings, db, lo
         assert c.get("/whoami").json() == {"principal_id": user.id}
 
 
-async def test_totp_second_step_fails_if_totp_was_removed_meanwhile(client, seed, db, settings, csrf_of):
-    secret = pyotp.random_base32()
+async def test_totp_second_step_fails_if_totp_was_removed_meanwhile(client, seed, db, enable_totp, totp_code, csrf_of):
     user = await seed.user("race@example.com", password_hash=hash_password("a long enough password"))
-    async with db.session() as s:
-        (await s.get(UserRow, user.id)).totp_secret_enc = _cipher(settings).encrypt(secret, aad=user.id)
+    secret = await enable_totp(user.id)
     token = csrf_of(client)
     step1 = client.post(
         "/auth/login",
         data={"email": "race@example.com", "password": "a long enough password", "csrf_token": token},
     )
-    assert step1.status_code == 200
+    assert step1.status_code == 303 and step1.headers["location"] == "/auth/mfa"
+    token = csrf_of(client, "/auth/mfa")
     async with db.session() as s:
         (await s.get(UserRow, user.id)).totp_secret_enc = None
-    step2 = client.post("/auth/login", data={"code": pyotp.TOTP(secret).now(), "csrf_token": token})
-    assert step2.status_code == 401
+    step2 = client.post("/auth/mfa", data={"code": totp_code(secret), "csrf_token": token})
+    assert step2.status_code == 303 and step2.headers["location"] == "/login"
+    assert client.get("/").status_code == 303
 
 
 async def test_logout_with_vanished_account(client, db, login, csrf_of):

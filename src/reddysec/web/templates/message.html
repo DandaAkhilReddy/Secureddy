@@ -9,7 +9,7 @@
 <header class="verdict-banner verdict-{{ report.chip.tone }}">
   <div class="verdict-icon" aria-hidden="true">{{ icon(report.chip.tone, "ico ico-xl") }}</div>
   <div class="verdict-body">
-    <div class="verdict-block">{{ chip(report.chip) }}</div>
+    <div class="verdict-block">{{ chip(report.chip) }}{% set moved = moved_chip(message) %}{% if moved %} {{ chip(moved) }}{% endif %}</div>
     <h1 class="headline">{{ report.headline }}</h1>
     <p class="summary">{{ report.summary }}</p>
     {% if decision_note %}<p class="note note-decision">{{ decision_note }}</p>{% endif %}
@@ -32,6 +32,58 @@
   <div><dt>To</dt><dd>{{ mailbox.address }}</dd></div>
   <div><dt>Received</dt><dd><time datetime="{{ message.received_at.isoformat() }}">{{ message.received_at | dt }}</time></dd></div>
 </dl>
+
+{% if can_read %}
+<div class="mail-tools">
+  <nav class="tabs tabs-tight" aria-label="Report or email">
+    <a class="tab" href="/messages/{{ message.id }}"{% if tab == "report" %} aria-current="page"{% endif %}>{{ icon("shield-check") }} Report</a>
+    <a class="tab" href="/messages/{{ message.id }}?tab=read"{% if tab == "read" %} aria-current="page"{% endif %}>{{ icon("mail") }} Read email</a>
+  </nav>
+  <div class="mail-actions" aria-label="Email actions">
+    <form method="post" action="/messages/{{ message.id }}/archive">{{ csrf() }}<input type="hidden" name="next" value="/messages/{{ message.id }}{{ '?tab=read' if tab == 'read' }}"><button class="btn btn-ghost btn-small" type="submit">{{ icon("archive") }}<span>Archive</span></button></form>
+    <form method="post" action="/messages/{{ message.id }}/read">{{ csrf() }}<input type="hidden" name="next" value="/messages/{{ message.id }}{{ '?tab=read' if tab == 'read' }}"><button class="btn btn-ghost btn-small" type="submit">{{ icon("eye") }}<span>Mark read</span></button></form>
+    <form method="post" action="/messages/{{ message.id }}/unread">{{ csrf() }}<input type="hidden" name="next" value="/messages/{{ message.id }}{{ '?tab=read' if tab == 'read' }}"><button class="btn btn-ghost btn-small" type="submit">{{ icon("eye-off") }}<span>Mark unread</span></button></form>
+    <form method="post" action="/messages/{{ message.id }}/trash" data-confirm="Move this email to the Trash in {{ provider_app }}?">{{ csrf() }}<input type="hidden" name="next" value="/messages"><button class="btn btn-ghost btn-small" type="submit">{{ icon("trash") }}<span>Delete</span></button></form>
+    <a class="btn btn-ghost btn-small" href="/messages/{{ message.id }}/open" rel="noopener noreferrer">{{ icon("reply") }}<span>Reply in {{ provider_app }}</span></a>
+  </div>
+</div>
+{% endif %}
+
+{% if tab == "read" %}
+<section class="card read-card" aria-labelledby="read-title">
+  <div class="read-head">
+    <h2 id="read-title" class="sr-only">The email</h2>
+    <p class="muted small read-note">{{ icon("lock", "ico") }}<span>Opened live from {{ provider_app }} and never stored. Links go through our safety check first.</span></p>
+    {% if images %}
+    <a class="btn btn-quiet btn-small" href="/messages/{{ message.id }}?tab=read">{{ icon("eye-off") }}<span>Hide images</span></a>
+    {% else %}
+    <a class="btn btn-quiet btn-small" href="/messages/{{ message.id }}?tab=read&amp;images=1">{{ icon("eye") }}<span>Load images</span></a>
+    {% endif %}
+  </div>
+  {% if not images %}<p class="help read-images-note">Pictures from the internet are blocked: they can tell the sender you opened this email. "Load images" fetches them through our servers, without your address.</p>{% endif %}
+  <iframe class="read-frame" title="The email from {{ message.from_name or message.from_address or 'the sender' }}" src="/messages/{{ message.id }}/body{{ '?images=1' if images }}" sandbox="allow-top-navigation-by-user-activation" referrerpolicy="no-referrer"></iframe>
+  {% if report.attachments %}
+  <h3 class="sub-title">Files</h3>
+  <ul class="attachment-list">
+    {% for a in report.attachments %}
+    <li class="attachment-item">
+      <div class="url-head">
+        {{ chip(a.chip) }}
+        <span class="filename">{{ a.filename }}</span>
+        {% if a.chip.tone == "ok" %}
+        <a class="btn btn-quiet btn-small" href="/messages/{{ message.id }}/attachments/{{ loop.index0 }}">{{ icon("download") }}<span>Download</span></a>
+        {% elif a.safe_copy_url %}
+        <a class="btn btn-quiet btn-small" href="{{ a.safe_copy_url }}">{{ icon("download") }}<span>Get safe copy</span></a>
+        {% else %}
+        <span class="muted small">No download: we could not make a safe copy.</span>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
 
 {# 4. What you can do (kept near the top: it is what the reader came for) #}
 <section class="card action-bar action-sheet" id="decide" aria-labelledby="actions-title">
@@ -64,10 +116,12 @@
     <button class="btn btn-quiet" type="submit">Ask the concierge to review</button>
   </form>
   {% if report.can_mark_safe or report.can_mark_fake %}
-  <p class="help">{{ '"Not fake?"' if message.quarantined else '"Mark as safe"' }} teaches us to trust this sender. We still check every email they send and tell you if one looks different. "This is fake" sends their email to Quarantine from now on. You can undo either on the Mailboxes page.</p>
+  <p class="help">{{ '"Not fake?"' if message.quarantined else '"Mark as safe"' }} teaches us to trust this sender. We still check every email they send and tell you if one looks different. "This is fake" moves their email out of your inbox from now on. You can undo either on the Accounts page.</p>
   {% endif %}
 </section>
 <a class="sheet-backdrop" href="#_" aria-hidden="true" tabindex="-1"></a>
+
+{% if tab != "read" %}
 
 {# 2. Why we think this #}
 {% if report.reasons or report.good_signs %}
@@ -115,8 +169,9 @@
   </ul>
 
   {% if report.urls %}
-  <h3 class="sub-title">Links in this email</h3>
-  <p class="help">Links are shown as text on purpose. Open them only through the Reading Room, which runs the page on our servers and shows you a live picture of it.</p>
+  <h3 class="sub-title" id="links">Links in this email</h3>
+  {% if links_summary %}<p class="links-summary">{{ links_summary }}</p>{% endif %}
+  <p class="help">Links are shown as text on purpose. Each one says whether it is safe to open, or should only be opened in the Reading Room, which runs the page on our servers and shows you a live picture of it.</p>
   <ul class="url-list">
     {% for u in report.urls %}
     <li class="url-item">
@@ -124,6 +179,9 @@
         {{ chip(u.chip) }}
         <code class="url-text">{{ u.url }}</code>
       </div>
+      <p class="advice advice-{{ advice_copy[u.advice].tone }}">{{ icon("check" if u.advice == "safe_to_open" else ("x" if u.advice == "do_not_open" else "eye"), "ico") }}<span><strong>{{ advice_copy[u.advice].title }}.</strong>{% if u.advice_reason %} {{ u.advice_reason }}{% endif %}</span></p>
+      {% if u.downloads %}<p class="muted small">{{ u.downloads }}</p>{% endif %}
+      {% if u.advice == "safe_to_open" %}<a class="btn btn-quiet btn-small" href="{{ go[u.url] }}">{{ icon("external") }}<span>Open link</span></a>{% endif %}
       {% if u.final_url %}<p class="muted small">Ends up at <code class="url-text">{{ u.final_url }}</code></p>{% endif %}
       {% if u.detonated and not u.screenshot_url %}
       <p class="muted small">Opened in our sandbox; no picture was kept.</p>
@@ -179,6 +237,8 @@
 </section>
 {% endif %}
 
+{% endif %}{# end report tab: technical details stay on both #}
+{% if tab == "report" %}
 {# 5. Technical details, for the curious and for our analysts #}
 <details class="card details tech">
   <summary><h2>Technical details</h2></summary>
@@ -207,6 +267,7 @@
   {{ signals(a.signals) }}
   {% endfor %}
 </details>
+{% endif %}
 
 <a class="sheet-open{% if not flagged %} sheet-open-quiet{% endif %}" href="#decide">{{ icon("shield-check") }}<span>{{ ("Not fake?" if message.quarantined else "Not suspicious?") if flagged and report.can_mark_safe else "What do you want to do?" }}</span></a>
 {% endblock %}

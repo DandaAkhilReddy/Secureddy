@@ -50,6 +50,12 @@
           </div>
           <div class="nav-foot-actions">
             <button class="btn btn-quiet btn-small install-btn" type="button" data-install hidden>{{ icon("download") }}<span>Install Secureddy</span></button>
+            {% if lock_enabled %}
+            <form method="post" action="/lock/now">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn btn-quiet btn-small" type="submit">{{ icon("lock") }}<span>Lock now</span></button>
+            </form>
+            {% endif %}
             <form method="post" action="/auth/logout">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn btn-quiet btn-small" type="submit">Sign out</button>

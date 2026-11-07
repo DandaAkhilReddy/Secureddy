@@ -149,6 +149,50 @@ def sniff_type(data: bytes) -> str:
     return "unknown"
 
 
+_ONENOTE_MAGIC = bytes.fromhex("e4525c7b8cd8a74daeb15378d02996d3")
+_LNK_MAGIC = b"L\x00\x00\x00\x01\x14\x02\x00"
+# Text formats that Windows treats as programs or remote shortcuts. Matched on
+# the first few KB of a download that otherwise sniffs as text/html/unknown.
+_TEXT_FORMATS: tuple[tuple[re.Pattern[bytes], str], ...] = (
+    (re.compile(rb"<\s*AppInstaller\b", re.I), "appinstaller"),
+    (re.compile(rb"<\s*libraryDescription\b", re.I), "library-ms"),
+    (re.compile(rb"<\s*searchConnectorDescription\b", re.I), "searchconnector-ms"),
+    (re.compile(rb"^\s*\[InternetShortcut\]", re.I), "url-shortcut"),
+    (re.compile(rb"<\s*HTA:APPLICATION\b", re.I), "hta"),
+    (re.compile(rb"<\s*job\b[^>]*>\s*<\s*script\b", re.I), "wsf"),
+    (re.compile(rb"<\s*svg\b", re.I), "svg"),
+)
+
+
+def refine_download_type(head: bytes, filename: str | None, label: str) -> str:
+    """Sharpen ``sniff_type``'s label for downloads, where the dangerous
+    formats matter most: ISO / VHD(X) disk images, Windows shortcuts, OneNote,
+    MSI installers, App Installer / .library-ms / .url files and HTA.
+
+    ``head`` should hold at least 0x8006 bytes to recognise ISO images.
+    """
+    if not head:
+        return label
+    if head.startswith(_LNK_MAGIC):
+        return "lnk"
+    if head.startswith(_ONENOTE_MAGIC):
+        return "one"
+    if len(head) > 0x8006 and head[0x8001:0x8006] == b"CD001":
+        return "iso9660"
+    if head.startswith(b"vhdxfile"):
+        return "vhdx"
+    if head.startswith(b"conectix"):
+        return "vhd"
+    if label == "ole" and extension_of(filename) in {"msi", "msp"}:
+        return "msi"
+    if label in {"text", "html", "unknown", "script"}:
+        sample = head[:8192]
+        for pattern, name in _TEXT_FORMATS:
+            if pattern.search(sample):
+                return name
+    return label
+
+
 def _looks_textual(sample: bytes) -> bool:
     if b"\x00" in sample:
         return False

@@ -33,6 +33,7 @@ import ssl
 from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.header import decode_header, make_header
 from email.parser import BytesHeaderParser
 from typing import Any, Protocol, TypeVar
 
@@ -46,8 +47,12 @@ from reddysec.mail.base import (
     LABEL_RELEASED,
     LABEL_SAFE,
     LABEL_SUSPICIOUS,
+    SEARCH_MAX,
     AuthExpired,
     ConnectorError,
+    SearchHit,
+    clean_query,
+    split_from,
 )
 from reddysec.mail.gmail import should_quarantine
 from reddysec.models import PolicyConfig, ProtectionMode, Provider, RawMessage, Verdict, VerdictLevel
@@ -291,7 +296,8 @@ class ImaplibSession:
         if not uids:
             return []
         sequence = ",".join(str(u) for u in uids)
-        data = self._check(self._conn.uid("FETCH", sequence, "(UID INTERNALDATE FLAGS RFC822)"), "UID FETCH")
+        # BODY.PEEK[] rather than RFC822: checking an email must not mark it read.
+        data = self._check(self._conn.uid("FETCH", sequence, "(UID INTERNALDATE FLAGS BODY.PEEK[])"), "UID FETCH")
         return self._parse_fetch(data)
 
     @staticmethod
@@ -728,6 +734,84 @@ class ImapConnector:
             "in your mail provider's settings; otherwise new mail will keep landing there."
         )
 
+    # ------------------------------------------------- reading and tidying mail
+    async def search(self, query: str, limit: int = 20) -> list[SearchHit]:
+        """``UID SEARCH TEXT`` in the inbox, newest first. IMAP search is plain
+        ASCII here (no CHARSET literal), so other characters are dropped."""
+        q = "".join(ch for ch in clean_query(query) if ord(ch) < 128).strip()
+        if not q:
+            return []
+        limit = max(1, min(limit, SEARCH_MAX))
+
+        def op(sess: ImapSession) -> list[SearchHit]:
+            info = sess.select(INBOX)
+            uids = sorted(sess.uid_search(f'TEXT "{q}"'), reverse=True)[:limit]
+            fetched = sess.uid_fetch(sorted(uids)) if uids else []
+            hits = [_search_hit(Location(INBOX, info.uidvalidity, f.uid), f) for f in fetched]
+            return sorted(hits, key=lambda h: h.received_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+
+        return await self._run(op)
+
+    async def _act(self, provider_message_id: str, action: Callable[[ImapSession, str, int], None]) -> None:
+        loc = Location.parse(provider_message_id)
+        rfc_id = await self._resolve_message_id(provider_message_id)
+
+        def op(sess: ImapSession) -> None:
+            found = self._locate(sess, loc, rfc_id)
+            if found is None:
+                raise ConnectorError(f"message {provider_message_id} not found", retryable=False)
+            folder, uid, _info = found
+            action(sess, folder, uid)
+
+        await self._run(op)
+
+    def _special_folder(self, sess: ImapSession, flag: str, names: tuple[str, ...]) -> str:
+        """The server's special-use folder (RFC 6154 ``\\Archive``,
+        ``\\Trash``), else a folder with a familiar name, else one we create."""
+        folders = sess.list_folders()
+        for f in folders:
+            if flag in f.flags:
+                return f.name
+        lowered = {f.name.lower(): f.name for f in folders}
+        for name in names:
+            if name.lower() in lowered:
+                return lowered[name.lower()]
+        sess.create_folder(names[0])
+        return names[0]
+
+    async def archive(self, provider_message_id: str) -> None:
+        def action(sess: ImapSession, folder: str, uid: int) -> None:
+            target = self._special_folder(sess, "\\Archive", ("Archive", "Archives"))
+            if folder != target:
+                sess.select(folder)
+                self._move(sess, uid, target)
+
+        await self._act(provider_message_id, action)
+
+    async def trash(self, provider_message_id: str) -> None:
+        """The provider's Trash folder, never a permanent delete."""
+
+        def action(sess: ImapSession, folder: str, uid: int) -> None:
+            target = self._special_folder(sess, "\\Trash", ("Trash", "Deleted Messages", "Deleted Items", "Deleted"))
+            if folder != target:
+                sess.select(folder)
+                self._move(sess, uid, target)
+
+        await self._act(provider_message_id, action)
+
+    async def set_read(self, provider_message_id: str, read: bool) -> None:
+        await self._act(
+            provider_message_id, lambda sess, _f, uid: sess.uid_store(uid, "+FLAGS" if read else "-FLAGS", ["\\Seen"])
+        )
+
+    async def web_link(self, provider_message_id: str) -> str:
+        return WEB_HOMES.get(self.provider, "")
+
+    async def revoke(self) -> bool:
+        """An app password cannot be revoked from here: we delete our copy and
+        the person deletes the app password in their provider's settings."""
+        return False
+
     # ------------------------------------------------------------ internals
     async def _relocate(
         self,
@@ -767,6 +851,39 @@ class ImapConnector:
             provider_labels=[folder, *sorted(fetched.flags)],
             thread_id=None,
         )
+
+
+WEB_HOMES: dict[Provider, str] = {
+    Provider.YAHOO: "https://mail.yahoo.com/",
+    Provider.ICLOUD: "https://www.icloud.com/mail/",
+    Provider.OUTLOOK: "https://outlook.live.com/mail/",
+}
+
+
+def _header_text(value: Any) -> str:
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(str(value))))
+    except Exception:  # noqa: BLE001 - a malformed encoded word is shown as is
+        return str(value)
+
+
+def _search_hit(loc: Location, fetched: FetchedMessage) -> SearchHit:
+    try:
+        headers = BytesHeaderParser().parsebytes(fetched.raw, headersonly=True)
+    except Exception:  # noqa: BLE001
+        headers = {}
+    name, address = split_from(_header_text(headers.get("From")))
+    return SearchHit(
+        provider_message_id=str(loc),
+        from_name=name,
+        from_address=address,
+        subject=_header_text(headers.get("Subject")),
+        received_at=fetched.internal_date,
+        snippet="",
+        unread="\\Seen" not in fetched.flags,
+    )
 
 
 def _rfc_message_id(raw: bytes) -> str | None:

@@ -62,9 +62,18 @@ param googlePubsubTopic = ''
 param microsoftClientId = '8cc0907f-7f8e-45ec-9758-102eea8c1a00'
 // Claude for the assistant and the second-opinion reviewer. Turn on once Key
 // Vault secret rs-anthropic-api-key exists.
-param anthropicEnabled = false
-param llmProvider = 'none'
-param assistantProvider = ''
+param anthropicEnabled = true
+param llmProvider = 'anthropic'
+param assistantProvider = 'anthropic'
+// Keyless Claude (Workload Identity Federation). Fill in the ids the Claude
+// Console shows (docs/claude-keyless-setup.md), then set anthropicEnabled =
+// false and delete Key Vault secret rs-anthropic-api-key. Identifiers only.
+param anthropicWifAudience = 'api://5c08b3d9-f257-4add-b919-e10afac41f5b'
+param anthropicWebFederationRuleId = ''
+param anthropicWorkerFederationRuleId = ''
+param anthropicOrganizationId = ''
+param anthropicServiceAccountId = ''
+param anthropicWorkspaceId = ''
 param safeBrowsingEnabled = false
 param azureOpenAiEnabled = false
 param smtpEnabled = false

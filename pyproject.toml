@@ -5,8 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "reddysec"
 version = "0.1.0"
-description = "Secureddy: pre-delivery email detonation and isolated browsing for private clients"
+description = "Secureddy: an inbox bodyguard. Checks every link and file in a sandbox before you see it."
+readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Akhil Reddy Danda" }]
+keywords = ["email security", "phishing", "sandbox", "gmail", "outlook", "yahoo", "fastapi"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Intended Audience :: End Users/Desktop",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Email",
+  "Topic :: Security",
+]
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
@@ -34,16 +52,26 @@ dependencies = [
   "google-api-python-client>=2.130",
   "argon2-cffi>=23",
   "pyotp>=2.9",
+  "qrcode>=7.4",
   "structlog>=24",
   "python-dotenv>=1.0",
   "email-validator>=2.1",
   "pyzipper>=0.3.6",
+  "nh3>=0.2.17",
+  "webauthn>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/DandaAkhilReddy/Secureddy"
+Source = "https://github.com/DandaAkhilReddy/Secureddy"
+Issues = "https://github.com/DandaAkhilReddy/Secureddy/issues"
+Security = "https://github.com/DandaAkhilReddy/Secureddy/security/policy"
 
 [project.optional-dependencies]
 # asyncpg: the "postgres" tests run against a real PostgreSQL when one is
 # available (see tests/postgres/conftest.py) and skip cleanly otherwise.
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "aiosmtpd>=1.4", "qrcode>=7.4", "ruff>=0.5", "asyncpg>=0.30"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "aiosmtpd>=1.4", "ruff>=0.5", "asyncpg>=0.30",
+       "cbor2>=5", "pre-commit>=3"]
 azure = [
   "azure-identity>=1.16",
   "azure-mgmt-containerinstance>=10.1",

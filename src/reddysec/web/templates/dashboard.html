@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import chip, icon, avatar, decide_forms, empty_art, csrf, trust_badge, connect_chooser with context %}
+{% from "_macros.html" import chip, icon, avatar, decide_forms, empty_art, csrf, trust_badge, connect_chooser, inbox_switch, period_switch, account_tag, provider_logo with context %}
 {% block title %}Home · Secureddy{% endblock %}
 {% block content %}
 <header class="hero hero-{{ hero.tone }}">
@@ -7,6 +7,8 @@
   <h1 class="hero-title"><span class="status-dot" aria-hidden="true"></span>{{ hero.title }}</h1>
   <p class="lede">{{ sentence }}</p>
 </header>
+
+{{ inbox_switch(switcher) }}
 
 {% if show_empty_state %}
 <section class="card empty empty-setup">
@@ -29,15 +31,19 @@
   {{ connect_chooser(google_login_enabled, microsoft_login_enabled) }}
 </section>
 {% else %}
-<section aria-labelledby="stats-title">
-  <h2 id="stats-title" class="sr-only">This week</h2>
-  <ul class="stats">
+<section aria-labelledby="stats-title" class="period-block">
+  <div class="period-bar">
+    <h2 id="stats-title" class="sr-only">Your numbers for {{ period_label }}</h2>
+    {{ period_switch(periods) }}
+    <p class="period-total"><span class="num">{{ counts.checked }}</span> email{{ "s" if counts.checked != 1 }} checked <span class="muted">{{ period_when }}</span></p>
+  </div>
+  <ul class="stats stats-2">
     {% for card in stat_cards %}
     <li>
       <a class="stat stat-link stat-{{ card.tone }}" href="{{ card.href }}" aria-label="{{ card.aria }}">
         <span class="stat-top">
           <span class="stat-label">{{ icon(card.tone, "stat-ico") }}{{ card.label }}</span>
-          <span class="stat-period">7 days</span>
+          <span class="stat-period">{{ period_label }}</span>
         </span>
         <span class="stat-row">
           <span class="stat-value">{{ card.count }}</span>
@@ -49,6 +55,7 @@
           </svg>
           {% endif %}
         </span>
+        {% if card.sub %}<span class="stat-sub">{{ card.sub }}</span>{% endif %}
         <span class="stat-hint">{{ card.hint }} {{ icon("arrow", "ico ico-sm") }}</span>
       </a>
     </li>
@@ -63,7 +70,7 @@
     <section class="card card-flush" aria-labelledby="recent-title">
       <div class="card-head card-head-pad">
         <h2 id="recent-title">Recent email</h2>
-        <a class="link" href="/messages">See all</a>
+        <a class="link" href="{{ see_all_href }}">See all</a>
       </div>
       <ul class="mlist">
         {% for r in recent %}
@@ -77,9 +84,10 @@
               </span>
               <span class="mrow-subject">{{ r.message.subject or "(no subject)" }}</span>
               <span class="mrow-reason">{{ r.reason or r.summary }}{% if r.message.lane %} <span class="mrow-lane">&middot; {{ r.message.lane | lane }}</span>{% endif %}</span>
-              {% if r.trust %}<span class="mrow-badges">{{ trust_badge(r.trust) }}</span>{% endif %}
+              {% set show_acct = (switcher | length > 2) and not selected %}
+              {% if r.trust or show_acct %}<span class="mrow-badges">{% if show_acct %}{{ account_tag(r.mailbox) }}{% endif %}{% if r.trust %}{{ trust_badge(r.trust) }}{% endif %}</span>{% endif %}
             </span>
-            <span class="mrow-chip">{{ chip(r.chip) }}</span>
+            <span class="mrow-chip">{{ chip(r.chip) }}{% if r.moved %}{{ chip(r.moved) }}{% endif %}</span>
           </a>
           {% if r.can_mark_safe or r.can_mark_fake %}
           <div class="mrow-actions">{{ decide_forms(r.message.id, r.can_mark_safe, r.can_mark_fake, next="/", compact=True, quarantined=r.quarantined) }}</div>
@@ -141,17 +149,20 @@
     {% if mailboxes %}
     <section class="card">
       <div class="card-head">
-        <h2>Your mailboxes</h2>
+        <h2>Your accounts</h2>
         <a class="link" href="/mailboxes">Manage</a>
       </div>
       <ul class="mailbox-list">
         {% for m in mailboxes %}
-        <li class="mailbox-row">
-          <div class="mailbox-id">
-            <strong>{{ m.row.address }}</strong>
-            <span class="muted">{{ m.row.provider | provider }}</span>
-          </div>
-          <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
+        <li>
+          <a class="mailbox-row mailbox-row-link" href="/?mailbox={{ m.row.id }}&amp;period={{ period }}"{% if selected == m.row.id %} aria-current="true"{% endif %}>
+            <span class="mini-logo">{{ provider_logo(PROVIDER_LOGOS.get(m.row.provider, "other")) }}</span>
+            <span class="mailbox-id">
+              <strong>{{ m.row.address }}</strong>
+              <span class="muted small">{{ m.week.checked }} checked · {{ m.week.flagged }} suspicious {{ period_when }}</span>
+              <span class="chips chips-start">{{ chip(m.status) }}</span>
+            </span>
+          </a>
         </li>
         {% endfor %}
       </ul>

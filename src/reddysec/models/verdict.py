@@ -59,6 +59,21 @@ class Signal(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+ClickAdvice = Literal["safe_to_open", "open_in_reading_room", "do_not_open"]
+
+
+class DownloadInfo(BaseModel):
+    """What opening a link downloaded, in words the client can act on."""
+
+    filename: str
+    sha256: str = ""
+    size: int = 0
+    file_type: str = ""  # sniffed content type tag (pe, zip, iso9660, lnk, ...)
+    category: str = "other"  # program, script, installer, archive, password_archive, disk_image, shortcut, document, other
+    dangerous: bool = False
+    why: str = ""
+
+
 class UrlVerdict(BaseModel):
     url: str
     level: VerdictLevel
@@ -68,6 +83,14 @@ class UrlVerdict(BaseModel):
     screenshot_ref: str | None = None
     detonation_job_id: str | None = None
     detonated: bool = False
+    # Per-link "is it safe to click?" (analysis.click_advice). Optional and
+    # additive: verdicts written before these fields existed leave them empty.
+    click_advice: ClickAdvice | None = None
+    click_advice_reason: str = ""
+    downloads_summary: list[DownloadInfo] = Field(default_factory=list)
+    # Wrappers and redirects the link hides behind, outermost first, ending
+    # at the address we analysed (open redirects, Safe Links, shorteners).
+    redirect_chain: list[str] = Field(default_factory=list)
 
 
 class AttachmentVerdict(BaseModel):
@@ -127,6 +150,10 @@ class Verdict(BaseModel):
     bulk_sender: bool = False
     # Set when the sender is trusted (by the client or by policy). See TrustCheck.
     trust_check: TrustCheck | None = None
+    # "Links: 2 safe · 1 open only in Reading Room · 1 do not open" and the
+    # counts behind it (keys: the ClickAdvice values). Empty without links.
+    links_summary: str = ""
+    link_advice_counts: dict[str, int] = Field(default_factory=dict)
 
     @property
     def top_signals(self) -> list[Signal]:

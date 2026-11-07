@@ -123,7 +123,7 @@ class TestThisIsFake:
         assert (entry.scope, entry.value, entry.decision) == ("domain", "walmart.com", "blocked")
         assert (await _message(db, message.id)).state == "quarantine_requested"
         page = client.get(f"/messages/{message.id}").text
-        assert "email from walmart.com goes straight to Quarantine" in page
+        assert "email from walmart.com is moved out of your inbox" in page
         assert "sender_blocked" in await _actions(db)
 
     async def test_unverified_fake_only_blocks_unverified_mail(self, client, seed, login, csrf_of, make_verdict, db):
@@ -250,7 +250,7 @@ class TestSenderList:
         page = client.get("/mailboxes").text
         assert "Trusted &amp; blocked senders" in page and "walmart.com" in page and "x@bad.example" in page
         assert "Email that Google confirms is from walmart.com is marked Checked after we check it." in page
-        assert "Goes to Quarantine unless Google confirms it is really them." in page
+        assert "Their email is moved out of your inbox unless Google confirms it is really them." in page
         assert 'aria-label="Remove walmart.com"' in page
         r = client.post(f"/mailboxes/{mailbox.id}/senders/sfb_1/remove", data={"csrf_token": csrf_of(client, "/mailboxes")})
         assert r.status_code == 303
@@ -289,11 +289,14 @@ class TestDashboardAndList:
         await seed.message(mailbox, level="malicious")
         login(client, "owner@example.com")
         page = client.get("/").text
-        assert 'href="/messages?level=suspicious&amp;days=7"' in page
-        assert 'href="/messages?level=safe&amp;days=7"' in page
-        assert 'href="/messages?filter=quarantined&amp;days=7"' in page
+        assert 'href="/messages?tab=suspicious&amp;period=7d"' in page
+        assert 'href="/messages?tab=checked&amp;period=7d"' in page
+        assert "filter=quarantined" not in page and "In Quarantine" not in page
         assert "Tap to see why" in page
-        assert 'aria-label="3 suspicious this week. See which emails and why"' in page
+        # The dangerous one we moved counts as Suspicious too.
+        assert ('aria-label="4 suspicious this week, 1 moved out of your inbox. See which emails and why"' in page)
+        assert '<span class="stat-sub">1 moved out of your inbox</span>' in page
+        assert '<span class="num">5</span> emails checked' in page
 
     async def test_suspicious_tab_shows_why(self, client, seed, login, make_verdict):
         user = await seed.user("owner@example.com")
@@ -309,16 +312,17 @@ class TestDashboardAndList:
         assert "Account alert" in page and "Lunch" not in page
         assert "A link pretends to go to chase.com." in page
         assert 'aria-current="page">Suspicious</a>' in page
-        assert "Showing the last 7 days" in page and "Show all dates" in page
+        assert 'aria-current="true">7 days</a>' in page and "Show all dates" in page
 
     async def test_quarantine_tab_and_empty_states(self, client, seed, login):
         user = await seed.user("owner@example.com")
         mailbox = await seed.mailbox(user)
         await seed.message(mailbox, level="safe", subject="Fine")
         login(client, "owner@example.com")
-        assert "Quarantine is empty" in client.get("/messages?filter=quarantined").text
-        assert "Nothing suspicious" in client.get("/messages?level=suspicious").text
-        assert "Fine" in client.get("/messages?level=safe").text
+        assert "Nothing suspicious" in client.get("/messages?filter=quarantined", follow_redirects=True).text
+        assert "Nothing suspicious" in client.get("/messages?tab=suspicious").text
+        assert "Fine" in client.get("/messages?tab=checked").text
+        assert "Fine" in client.get("/messages?level=safe").text  # older links still work
 
     async def test_pagination(self, client, seed, login):
         user = await seed.user("owner@example.com")
@@ -328,10 +332,10 @@ class TestDashboardAndList:
         login(client, "owner@example.com")
         first = client.get("/messages").text
         assert "Note 00" in first and "Note 49" in first and "Note 50" not in first
-        assert "Page 1 of 2" in first and 'href="/messages?page=2"' in first and "Newer" not in first
+        assert "Page 1 of 2" in first and 'href="/messages?period=7d&amp;page=2"' in first and "Newer" not in first
         second = client.get("/messages?page=2").text
         assert "Note 50" in second and "Note 54" in second and "Note 00" not in second
-        assert 'href="/messages?page=1"' in second
+        assert 'href="/messages?period=7d&amp;page=1"' in second
         assert client.get("/messages?page=0").status_code == 200
 
     async def test_pagination_keeps_filters(self, client, seed, login):
@@ -341,22 +345,33 @@ class TestDashboardAndList:
         for i in range(52):
             await seed.message(mailbox, level="malicious", subject=f"Bad {i:02d}", hours_ago=i + 1)
         login(client, "owner@example.com")
-        page = client.get(f"/messages?filter=quarantined&days=7&mailbox={mailbox.id}").text
-        assert f'href="/messages?filter=quarantined&amp;days=7&amp;mailbox={mailbox.id}&amp;page=2"' in page
-        page = client.get(f"/messages?level=malicious&mailbox={mailbox.id}&page=2").text
-        assert "Bad 51" in page and f'href="/messages?level=malicious&amp;mailbox={mailbox.id}&amp;page=1"' in page
+        page = client.get(f"/messages?filter=quarantined&days=7&mailbox={mailbox.id}", follow_redirects=True).text
+        assert f'href="/messages?tab=suspicious&amp;period=7d&amp;mailbox={mailbox.id}&amp;page=2"' in page
+        page = client.get(f"/messages?tab=suspicious&mailbox={mailbox.id}&page=2").text
+        assert "Bad 51" in page
+        assert f'href="/messages?tab=suspicious&amp;period=7d&amp;mailbox={mailbox.id}&amp;page=1"' in page
         assert 'name="mailbox"' in page  # two mailboxes: the mailbox picker is shown
 
     async def test_days_filter(self, client, seed, login):
         user = await seed.user("owner@example.com")
         mailbox = await seed.mailbox(user)
-        await seed.message(mailbox, level="suspicious", quarantined=False, subject="Recent", hours_ago=2)
+        await seed.message(mailbox, level="suspicious", quarantined=False, subject="Recent", hours_ago=0.01)
         await seed.message(mailbox, level="suspicious", quarantined=False, subject="Ancient", hours_ago=24 * 20)
         login(client, "owner@example.com")
         week = client.get("/messages?level=suspicious&days=7").text
         assert "Recent" in week and "Ancient" not in week
-        everything = client.get("/messages?level=suspicious&days=999").text  # unknown period: all dates
-        assert "Recent" in everything and "Ancient" in everything
+        month = client.get("/messages?tab=suspicious&period=1m").text
+        assert "Recent" in month and "Ancient" in month
+        # The choice is remembered (and shared with Home) until another is picked.
+        assert "Ancient" in client.get("/messages?tab=suspicious").text
+        assert "this month" in client.get("/").text
+        today = client.get("/messages?tab=suspicious&period=today").text
+        assert "Recent" in today and "Ancient" not in today
+        everything = client.get("/messages?tab=suspicious&period=all").text
+        assert "Recent" in everything and "Ancient" in everything and 'aria-current="true"' not in everything.split(
+            'class="period-switch"')[1].split("</nav>")[0]
+        unknown = client.get("/messages?tab=suspicious&days=999&period=bogus").text  # falls back to the stored choice
+        assert "Recent" in unknown and "Ancient" not in unknown
 
 
 class TestReportPage:

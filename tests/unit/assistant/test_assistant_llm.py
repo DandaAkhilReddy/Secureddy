@@ -44,14 +44,14 @@ class TestAnthropic:
                 {"type": "tool_use", "id": "tu_2", "name": "list_messages", "input": {"level": "suspicious"}},
             ]})
 
-        chat = AnthropicChat(client(handler), "sk-key", "claude-sonnet-4-5")
+        chat = AnthropicChat(client(handler), "sk-key", "claude-sonnet-5-5")
         reply = await chat.complete("SYSTEM", HISTORY, TOOLS)
         assert reply.text == "Checking." and reply.tool_calls[0].name == "list_messages"
         assert reply.tool_calls[0].arguments == {"level": "suspicious"} and reply.tool_calls[0].id == "tu_2"
         body = seen["body"]
         assert seen["url"] == "https://api.anthropic.com/v1/messages"
         assert seen["headers"]["x-api-key"] == "sk-key" and seen["headers"]["anthropic-version"] == "2023-06-01"
-        assert body["system"] == "SYSTEM" and body["model"] == "claude-sonnet-4-5"
+        assert body["system"] == "SYSTEM" and body["model"] == "claude-sonnet-5-5"
         assert body["tools"][0]["input_schema"]["properties"]["days"]["type"] == "integer"
         roles = [m["role"] for m in body["messages"]]
         assert roles == ["user", "assistant", "user"]
@@ -161,7 +161,7 @@ class TestFactory:
 
     def test_follows_llm_provider_and_default_model(self):
         s = self.settings(llm_provider="anthropic", anthropic_api_key=SecretStr("k"))
-        assert s.effective_assistant_provider == "anthropic" and s.effective_assistant_model == "claude-sonnet-4-5"
+        assert s.effective_assistant_provider == "anthropic" and s.effective_assistant_model == "claude-sonnet-5-5"
         model = chat_model_from_settings(s, httpx.AsyncClient())
         assert isinstance(model, AnthropicChat)
 

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf, icon with context %}
+{% block title %}Recovery codes · Secureddy{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>{{ "Two-step sign-in is on" if fresh_setup else "Your new recovery codes" }}</h1>
+  <p class="lede">Save these recovery codes now. If you lose your phone, each one lets you sign in once instead of a code from your app. We will not show them again{% if not fresh_setup %}, and your old codes no longer work{% endif %}.</p>
+</header>
+
+<section class="card recovery" aria-labelledby="codes-title">
+  <div class="card-head">
+    <h2 id="codes-title">Recovery codes</h2>
+    {{ icon("key", "ico ico-title") }}
+  </div>
+  <ol class="recovery-codes" data-copy-source>
+    {% for c in codes %}<li><code>{{ c }}</code></li>{% endfor %}
+  </ol>
+  <div class="recovery-actions">
+    <a class="btn btn-primary" href="{{ download_href }}" download="secureddy-recovery-codes.txt">{{ icon("download") }}<span>Download as .txt</span></a>
+    <button class="btn btn-quiet" type="button" data-copy="{{ codes | join('\n') }}" hidden>{{ icon("copy") }}<span>Copy</span></button>
+  </div>
+  <p class="muted small">Keep them in a password manager or print them and keep the paper at home. Anyone with a code and your sign-in can get in, so do not email them to yourself.</p>
+</section>
+
+<p><a class="btn btn-quiet" href="/settings/security#two-step">I saved them. Back to Settings</a></p>
+{% endblock %}

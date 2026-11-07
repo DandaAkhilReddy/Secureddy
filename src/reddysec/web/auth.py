@@ -24,6 +24,7 @@ through the same rules.
 
 from __future__ import annotations
 
+import inspect
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -39,10 +40,11 @@ from starlette.responses import RedirectResponse, Response
 
 from reddysec.core.logging import get_logger
 from reddysec.models import Role
-from reddysec.store.models import UserRow
+from reddysec.store.models import AppLockRow, UserRow, UserSessionRow
 
-from . import queries
+from . import mfa, preferences, queries
 from .security import (
+    client_ip,
     csrf_protect,
     current_user_id,
     flash,
@@ -51,12 +53,12 @@ from .security import (
     safe_return_to,
     tokens_match,
 )
-from .templating import render
+from .sessions import AuthContext, auth_of, create_session, device_name, revoke_session
+from .templating import remember_theme, render
 
 log = get_logger(__name__)
 
 TOTP_ISSUER = "Secureddy"
-TOTP_LOGIN_WINDOW_S = 300  # how long a verified password waits for its code
 PASSWORD_MIN_LENGTH = 12
 
 
@@ -148,6 +150,57 @@ def verify_totp(secret: str, code: str | None) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Sessions (see web.sessions)
+# --------------------------------------------------------------------------
+
+
+async def start_session(request: Request, user_id: str, *, method: str) -> None:
+    """Sign ``user_id`` in on this device: a new ``user_sessions`` row and
+    ``rs_sid`` cookie, a rotated flow cookie (new CSRF token), and the device's
+    previous session, if any, ended. A full sign-in also clears wrong-PIN
+    counts: it is the "Forgot PIN" path."""
+    settings = request.app.state.settings
+    db = request.app.state.db
+    previous = auth_of(request)
+    if previous is not None:
+        async with db.session() as session:
+            row = await session.get(UserSessionRow, previous.session_id)
+            if row is not None:
+                await revoke_session(session, row, "replaced")
+    token, row = await create_session(
+        db,
+        user_id,
+        user_agent=request.headers.get("user-agent", ""),
+        ip=client_ip(request.scope),
+        method=method,
+        idle_days=settings.session_idle_days,
+        absolute_days=settings.session_absolute_days,
+    )
+    async with db.session() as session:
+        lock = await session.get(AppLockRow, user_id)
+        if lock is not None and (lock.failed_attempts or lock.locked_until):
+            lock.failed_attempts = 0
+            lock.locked_until = None
+    login_session(request)
+    max_age = int((row.expires_at - row.created_at).total_seconds())
+    request.scope["auth_set_cookie"] = (token, max_age)
+    request.scope["auth"] = AuthContext(session_id=row.id, handle=row.handle, user_id=user_id)
+
+
+async def end_session(request: Request, reason: str = "signed_out") -> None:
+    """Sign this device out: revoke its session row and clear both cookies."""
+    auth = auth_of(request)
+    if auth is not None:
+        async with request.app.state.db.session() as session:
+            row = await session.get(UserSessionRow, auth.session_id)
+            if row is not None:
+                await revoke_session(session, row, reason)
+    request.scope.pop("auth", None)
+    request.scope["auth_clear_cookie"] = True
+    logout_session(request)
+
+
+# --------------------------------------------------------------------------
 # Dependencies
 # --------------------------------------------------------------------------
 
@@ -164,10 +217,13 @@ async def current_user(request: Request) -> UserRow:
     if uid:
         async with request.app.state.db.session() as session:
             user = await queries.get_user(session, uid)
+            theme = await preferences.get_preference(session, uid, preferences.THEME) if user is not None else ""
         if user is not None and not user.disabled:
             request.state.user = user
+            if theme:
+                remember_theme(request, theme)
             return user
-        logout_session(request)
+        await end_session(request, "account_closed")
     raise LoginRequired(next_url=_next_url(request))
 
 
@@ -208,13 +264,12 @@ def _login_page(
     next_url: str,
     error: str | None = None,
     email: str = "",
-    needs_code: bool = False,
     status_code: int = 200,
 ) -> Response:
     return render(
         request,
         "login.html",
-        {"next_url": next_url, "error": error, "email": email, "needs_code": needs_code},
+        {"next_url": next_url, "error": error, "email": email},
         status_code=status_code,
     )
 
@@ -251,16 +306,33 @@ def _not_set_up(provider: str) -> HTTPException:
     )
 
 
-def _begin_oauth(request: Request, provider: str, return_to: str, *, link: str | None = None) -> Response:
-    """Start a sign-in (``link`` None) or a "Connect another mailbox" flow
-    (``link`` = the signed-in account's id). State and PKCE verifier stay in
-    the signed session cookie; ``link`` is kept there *and* in the provider's
-    signed ``state`` and both are checked against the signed-in session at
-    the callback."""
+PURPOSES = ("mailbox", "signin")
+
+
+def _begin_oauth(
+    request: Request,
+    provider: str,
+    return_to: str,
+    *,
+    link: str | None = None,
+    purpose: str = "mailbox",
+    login_hint: str | None = None,
+) -> Response:
+    """Start a sign-in (``link`` None) or a link flow while signed in (``link``
+    = the signed-in account's id): "Add an account" / "Reconnect" (purpose
+    ``mailbox``) or "Ways to sign in" (purpose ``signin``). State and PKCE
+    verifier stay in the signed flow cookie; ``link`` is kept there *and* in
+    the provider's signed ``state`` and both are checked against the
+    signed-in session at the callback."""
     oauth = _oauth_for(request, provider)
     if oauth is None:
         raise _not_set_up(provider)
-    start = oauth.begin(return_to=return_to, link=link) if link else oauth.begin(return_to=return_to)
+    kwargs: dict[str, Any] = {"return_to": return_to}
+    if link:
+        kwargs["link"] = link
+    if login_hint and "login_hint" in inspect.signature(oauth.begin).parameters:
+        kwargs["login_hint"] = login_hint
+    start = oauth.begin(**kwargs)
     pending: dict[str, Any] = {
         "provider": provider,
         "state": start.state,
@@ -270,6 +342,7 @@ def _begin_oauth(request: Request, provider: str, return_to: str, *, link: str |
     }
     if link:
         pending["link"] = link
+        pending["purpose"] = purpose if purpose in PURPOSES else "mailbox"
     request.session["oauth"] = pending
     return _redirect(start.url)
 
@@ -290,13 +363,25 @@ async def yahoo_start(request: Request, next: str | None = None) -> Response:
 
 
 @router.post("/auth/{provider}/link", name="oauth_link")
-async def oauth_link(request: Request, provider: str, next: str = Form("/mailboxes")) -> Response:
-    """"Connect another mailbox" with Google / Microsoft / Yahoo while signed in.
-    A POST (CSRF-protected) so another site cannot start it for the client."""
+async def oauth_link(
+    request: Request,
+    provider: str,
+    next: str = Form(""),
+    purpose: str = Form("mailbox"),
+    login_hint: str = Form(""),
+) -> Response:
+    """"Add an account" / "Reconnect" / "Add a way to sign in" with Google,
+    Microsoft or Yahoo while signed in. A POST (CSRF-protected) so another
+    site cannot start it for the client. Linking is only ever to the account
+    that is signed in on this device, never by email."""
     if provider not in PROVIDER_NAMES:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     user = await current_user(request)
-    return _begin_oauth(request, provider, safe_return_to(next, "/mailboxes"), link=user.id)
+    default = "/settings/security" if purpose == "signin" else "/mailboxes"
+    hint = login_hint.strip().lower()[:254] or None
+    return _begin_oauth(
+        request, provider, safe_return_to(next, default), link=user.id, purpose=purpose, login_hint=hint
+    )
 
 
 def _token_payload(token: TokenSetLike, *, email: str, sub: str) -> dict[str, Any]:
@@ -319,6 +404,12 @@ class _Callback:
         self.pending = pending
         self.link = link
         self.claims: dict[str, Any] = dict(token.id_claims or {})
+
+    @property
+    def signin_only(self) -> bool:
+        """"Add a way to sign in": link the identity; touch a mailbox only if
+        one for this address is already protected (fresh tokens for it)."""
+        return bool(self.link) and self.pending.get("purpose") == "signin"
 
     @property
     def return_to(self) -> str:
@@ -363,6 +454,17 @@ async def _finish_oauth(
         flash(request, failed, "error")
         return _redirect("/mailboxes" if link else "/login")
     return _Callback(token, pending, link)
+
+
+def _link_action(result: _Callback) -> str:
+    if result.signin_only:
+        return "identity_linked"
+    return "mailbox_linked" if result.link else "login"
+
+
+async def _has_mailbox(session: Any, user: UserRow, address: str) -> bool:
+    mailbox = await queries.find_mailbox_by_address(session, user.id, address)
+    return mailbox is not None and mailbox.status != "disconnected"
 
 
 def _closed_account(request: Request) -> Response:
@@ -457,23 +559,24 @@ async def google_callback(
         if problem is None:
             if user.disabled:
                 return _closed_account(request)
-            await queries.connect_gmail_mailbox(
-                session, request.app.state.cipher, user, email, _token_payload(result.token, email=email, sub=sub)
-            )
+            payload = _token_payload(result.token, email=email, sub=sub)
+            if not result.signin_only or await _has_mailbox(session, user, email):
+                await queries.connect_gmail_mailbox(session, request.app.state.cipher, user, email, payload)
             queries.audit(
-                session, actor=user, action="mailbox_linked" if result.link else "login", details={"method": "google"}
+                session, actor=user, action=_link_action(result), details={"method": "google"}
             )
             user_id = user.id
     if problem is not None:
         return _identity_problem(request, "google", problem)
 
+    if result.signin_only:
+        flash(request, f"You can now sign in with Google ({email}).")
+        return _redirect(result.return_to)
     if result.link:
         flash(request, f"Gmail {email} is connected. We start checking new email within a minute.")
         return _redirect(result.return_to)
-    login_session(request, user_id)
-    if created:
-        flash(request, "Welcome. Your Gmail is connected and we start checking new email within a minute.")
-    return _redirect(result.return_to)
+    welcome = "Welcome. Your Gmail is connected and we start checking new email within a minute." if created else ""
+    return await finish_sign_in(request, user_id, method="google", next_url=result.return_to, welcome=welcome)
 
 
 @router.get("/auth/microsoft/callback", name="microsoft_callback")
@@ -515,23 +618,26 @@ async def microsoft_callback(
             if user.disabled:
                 return _closed_account(request)
             payload = {**_token_payload(result.token, email=email, sub=oid), "tid": tenant}
-            await queries.connect_microsoft_mailbox(session, request.app.state.cipher, user, email, payload)
+            if not result.signin_only or await _has_mailbox(session, user, email):
+                await queries.connect_microsoft_mailbox(session, request.app.state.cipher, user, email, payload)
             queries.audit(
-                session, actor=user, action="mailbox_linked" if result.link else "login",
+                session, actor=user, action=_link_action(result),
                 details={"method": "microsoft", "personal": tenant == PERSONAL_MICROSOFT_TENANT},
             )
             user_id = user.id
     if problem is not None:
         return _identity_problem(request, "microsoft", problem)
 
+    if result.signin_only:
+        flash(request, f"You can now sign in with Microsoft ({email}).")
+        return _redirect(result.return_to)
     message = f"Your Outlook mailbox {email} is connected. We start checking new email within a minute."
     if result.link:
         flash(request, message)
         return _redirect(result.return_to)
-    login_session(request, user_id)
-    if created:
-        flash(request, f"Welcome. {message}")
-    return _redirect(result.return_to)
+    return await finish_sign_in(
+        request, user_id, method="microsoft", next_url=result.return_to, welcome=f"Welcome. {message}" if created else ""
+    )
 
 
 @router.get("/auth/yahoo/callback", name="yahoo_callback")
@@ -578,9 +684,13 @@ async def yahoo_callback(
     if problem is not None:
         return _identity_problem(request, "yahoo", problem)
 
+    if result.signin_only:
+        flash(request, f"You can now sign in with Yahoo ({email}).")
+        return _redirect(result.return_to)
+    target = f"/mailboxes/connect-yahoo?address={quote(email)}"
     if not result.link:
-        login_session(request, user_id)
-    return _redirect(f"/mailboxes/connect-yahoo?address={quote(email)}")
+        return await finish_sign_in(request, user_id, method="yahoo", next_url=target)
+    return _redirect(target)
 
 
 @router.post("/auth/login", name="password_login")
@@ -591,54 +701,142 @@ async def password_login(
     code: str = Form(""),
     next: str = Form("/"),
 ) -> Response:
+    """Email and password. With two-step sign-in on, the authenticator code
+    comes next on ``/auth/mfa`` (or in the same form, when a password manager
+    fills both)."""
     next_url = safe_return_to(next)
-    marker = request.session.get("totp_login")
-    db = request.app.state.db
-    cipher = request.app.state.cipher
-
-    async with db.session() as session:
-        if password:
-            user = await queries.get_user_by_email(session, email) if email else None
-            ok = verify_password(user.password_hash if user else _DUMMY_HASH, password)
-            if not ok or user is None or user.disabled:
-                return _login_page(
-                    request, next_url=next_url, error=GENERIC_LOGIN_ERROR, email=email, status_code=401
-                )
-            if user.totp_secret_enc:
-                # Remember that the password step passed, so a wrong or missing
-                # code can be retried with the code alone for a few minutes.
-                request.session["totp_login"] = {
-                    "uid": user.id,
-                    "exp": int(time.time()) + TOTP_LOGIN_WINDOW_S,
-                }
-                if not code:
-                    return _login_page(request, next_url=next_url, email=user.login_email, needs_code=True)
-        elif code and isinstance(marker, dict) and int(marker.get("exp", 0)) > time.time():
-            # Second step: the password was verified moments ago (see marker).
-            user = await queries.get_user(session, str(marker.get("uid", "")))
-            if user is None or user.disabled or not user.totp_secret_enc:
-                return _login_page(request, next_url=next_url, error=GENERIC_LOGIN_ERROR, status_code=401)
-        else:
-            return _login_page(
-                request, next_url=next_url, error=GENERIC_LOGIN_ERROR, email=email, status_code=401
-            )
-
-        if user.totp_secret_enc:
-            secret = cipher.decrypt(user.totp_secret_enc, aad=user.id)
-            if not verify_totp(secret, code):
-                return _login_page(
-                    request,
-                    next_url=next_url,
-                    error=GENERIC_LOGIN_ERROR,
-                    email=user.login_email,
-                    needs_code=True,
-                    status_code=401,
-                )
+    async with request.app.state.db.session() as session:
+        user = await queries.get_user_by_email(session, email) if email and password else None
+        ok = verify_password(user.password_hash if user else _DUMMY_HASH, password)
+        if not ok or user is None or user.disabled:
+            return _login_page(request, next_url=next_url, error=GENERIC_LOGIN_ERROR, email=email, status_code=401)
         queries.audit(session, actor=user, action="login", details={"method": "password"})
         user_id = user.id
+    return await finish_sign_in(request, user_id, method="password", next_url=next_url, code=code)
 
-    login_session(request, user_id)
+
+# --------------------------------------------------------------------------
+# Two-step sign-in (web.mfa)
+# --------------------------------------------------------------------------
+
+
+async def finish_sign_in(
+    request: Request, user_id: str, *, method: str, next_url: str, welcome: str = "", code: str = ""
+) -> Response:
+    """The last step of every sign-in. Without two-step sign-in, or on a
+    device remembered for 30 days, the session starts now. Otherwise nothing
+    is signed in yet: the person goes to ``/auth/mfa`` for their code."""
+    cipher = request.app.state.cipher
+    async with request.app.state.db.session() as session:
+        user = await session.get(UserRow, user_id)
+        needs = user is not None and bool(user.totp_secret_enc)
+        trusted = needs and await mfa.device_is_trusted(session, user_id, request.cookies.get(mfa.TRUST_COOKIE))
+        result = None
+        if needs and not trusted and code.strip():
+            assert user is not None
+            secret = cipher.decrypt(user.totp_secret_enc, aad=user.id)
+            result = await mfa.check_code(session, user, secret, code, allow_recovery=False)
+    if needs and not trusted and not (result is not None and result.ok):
+        mfa.remember_pending(request.session, user_id, method, next_url)
+        if welcome:
+            request.session[mfa.SESSION_KEY]["w"] = welcome[:300]
+        if result is not None:
+            flash(request, mfa.result_message(result), "error")
+        return _redirect("/auth/mfa")
+    suffix = "+trusted" if trusted else ("+2fa" if needs else "")
+    await start_session(request, user_id, method=method + suffix)
+    if welcome:
+        flash(request, welcome)
     return _redirect(next_url)
+
+
+def _mfa_page(request: Request, pending: dict[str, Any], user: UserRow, *, error: str = "", status_code: int = 200
+              ) -> Response:
+    return render(
+        request,
+        "mfa.html",
+        {
+            "mfa_user": user,
+            "method": PROVIDER_NAMES.get(str(pending.get("m", "")), "your password"),
+            "error": error,
+            "remember_days": mfa.REMEMBER_DAYS,
+        },
+        status_code=status_code,
+    )
+
+
+async def _pending_user(request: Request) -> tuple[dict[str, Any] | None, UserRow | None]:
+    pending = mfa.pending_of(request.session)
+    if pending is None:
+        return None, None
+    async with request.app.state.db.session() as session:
+        user = await queries.get_user(session, str(pending["uid"]))
+    if user is None or user.disabled or not user.totp_secret_enc:
+        request.session.pop(mfa.SESSION_KEY, None)
+        return None, None
+    return pending, user
+
+
+@router.get("/auth/mfa", name="mfa_challenge")
+async def mfa_challenge(request: Request) -> Response:
+    pending, user = await _pending_user(request)
+    if pending is None or user is None:
+        flash(request, "Please sign in again.", "warn")
+        return _redirect("/login")
+    return _mfa_page(request, pending, user)
+
+
+@router.post("/auth/mfa", name="mfa_verify")
+async def mfa_verify(request: Request, code: str = Form(""), remember: str = Form("")) -> Response:
+    pending, user = await _pending_user(request)
+    if pending is None or user is None:
+        flash(request, "That took too long. Please sign in again.", "warn")
+        return _redirect("/login")
+    cipher = request.app.state.cipher
+    async with request.app.state.db.session() as session:
+        secret = cipher.decrypt(user.totp_secret_enc, aad=user.id)
+        result = await mfa.check_code(session, user, secret, code)
+        if result.ok:
+            queries.audit(session, actor=user, action="mfa_passed",
+                          details={"method": str(pending.get("m", "")), "with": result.outcome})
+        else:
+            queries.audit(session, actor=user, action="mfa_failed", details={"outcome": result.outcome})
+    if not result.ok:
+        what = "code"
+        return _mfa_page(request, pending, user, error=mfa.result_message(result, what=what),
+                         status_code=429 if result.outcome == "limited" else 401)
+    welcome = str(pending.get("w", ""))
+    next_url = safe_return_to(str(pending.get("next", "/")))
+    await start_session(request, user.id, method=f"{pending.get('m', '')}+2fa")
+    response = _redirect(next_url)
+    if remember == "1":
+        auth = auth_of(request)
+        async with request.app.state.db.session() as session:
+            token = await mfa.trust_device(
+                session, user.id, session_id=auth.session_id if auth else "",
+                user_agent=device_name(request.headers.get("user-agent")),
+            )
+        response.set_cookie(
+            mfa.TRUST_COOKIE, token, max_age=mfa.REMEMBER_DAYS * 86400, path="/", samesite="lax",
+            secure=request.app.state.settings.is_prod, httponly=True,
+        )
+    if welcome:
+        flash(request, welcome)
+    if result.outcome == "recovery":
+        left = result.recovery_left
+        flash(
+            request,
+            f"You used a recovery code. {left} left. " + (
+                "Make new ones in Settings soon." if left <= 3 else "Each one works once."),
+            "warn" if left <= 3 else "ok",
+        )
+    return response
+
+
+@router.post("/auth/mfa/cancel", name="mfa_cancel")
+async def mfa_cancel(request: Request) -> Response:
+    request.session.pop(mfa.SESSION_KEY, None)
+    return _redirect("/login")
 
 
 @router.post("/auth/logout", name="logout")
@@ -649,7 +847,7 @@ async def logout(request: Request) -> Response:
             user = await queries.get_user(session, uid)
             if user is not None:
                 queries.audit(session, actor=user, action="logout")
-    logout_session(request)
+    await end_session(request)
     flash(request, "You are signed out.")
     return _redirect("/login")
 
@@ -692,5 +890,4 @@ async def dev_login(
         )
         queries.audit(session, actor=user, action="login", details={"method": "dev"})
         user_id = user.id
-    login_session(request, user_id)
-    return _redirect(safe_return_to(next))
+    return await finish_sign_in(request, user_id, method="dev", next_url=safe_return_to(next))

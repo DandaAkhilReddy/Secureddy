@@ -48,6 +48,8 @@ NEVER_CACHE = (
     "/settings",
     "/audit",
     "/concierge",
+    "/lock",
+    "/go",
 )
 ICONS = (
     {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
@@ -62,6 +64,7 @@ def shell_urls() -> list[str]:
         f"/static/app.css?v={v}",
         f"/static/app.js?v={v}",
         f"/static/assistant.js?v={v}",
+        f"/static/lock.js?v={v}",
         "/static/icons/icon-192.png",
         "/static/icons/icon-512.png",
         "/static/icons/apple-touch-icon.png",
