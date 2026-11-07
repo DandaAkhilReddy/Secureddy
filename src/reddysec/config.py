@@ -73,6 +73,20 @@ class Settings(BaseSettings):
     # --- IMAP (Yahoo, iCloud, Outlook.com) -------------------------------
     imap_poll_seconds: int = 30
 
+    # --- checking older mail ("backfill") --------------------------------
+    # A newly set-up mailbox checks this many days of mail already in it
+    # (at most initial_backfill_limit messages) so its first screen is not
+    # empty. 0 days turns it off.
+    initial_backfill_days: int = 2
+    initial_backfill_limit: int = 50
+    # Older mail is fetched and checked this many messages per worker cycle,
+    # after new mail, so new mail is never kept waiting.
+    backfill_batch_size: int = 20
+    # A mailbox that fails this many cycles in a row is shown as needing
+    # attention; the worker keeps retrying it with a growing pause.
+    mailbox_failures_before_error: int = 3
+    mailbox_retry_max_seconds: int = 1800
+
     # --- analysis -------------------------------------------------------
     sandbox_backend: SandboxBackendName = "local"
     detonation_timeout_s: int = 45

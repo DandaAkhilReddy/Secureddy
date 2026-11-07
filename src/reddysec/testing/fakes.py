@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 
 from reddysec.models import (
@@ -69,13 +69,19 @@ class FakeMailbox:
         self.mode: ProtectionMode = ProtectionMode.SCAN
         self.hold_rule_installed = False
         self.actions: list[tuple[str, str]] = []
+        self.backfill_calls: list[tuple[datetime, int, frozenset[str]]] = []
         self._seq = 0
 
-    def deliver(self, raw: bytes, provider_message_id: str | None = None) -> RawMessage:
+    def deliver(
+        self, raw: bytes, provider_message_id: str | None = None, *, received_at: datetime | None = None
+    ) -> RawMessage:
         self._seq += 1
         pid = provider_message_id or f"m{self._seq}"
         msg = RawMessage(
-            provider_message_id=pid, mailbox_id=self.mailbox_id, received_at=datetime.now(UTC), raw=raw
+            provider_message_id=pid,
+            mailbox_id=self.mailbox_id,
+            received_at=received_at or datetime.now(UTC),
+            raw=raw,
         )
         self.messages[pid] = msg
         held = self.mode is ProtectionMode.HOLD and self.hold_rule_installed
@@ -95,6 +101,14 @@ class FakeMailbox:
 
     async def fetch_raw(self, provider_message_id: str) -> bytes:
         return self.messages[provider_message_id].raw
+
+    async def backfill(self, since: datetime, limit: int, *, skip: Collection[str] = ()) -> list[RawMessage]:
+        self.backfill_calls.append((since, limit, frozenset(skip)))
+        found = [
+            m for m in self.messages.values() if m.received_at >= since and m.provider_message_id not in skip
+        ]
+        found.sort(key=lambda m: m.received_at, reverse=True)
+        return found[: max(limit, 0)]
 
     async def apply_verdict(
         self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False

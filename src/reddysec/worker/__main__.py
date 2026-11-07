@@ -40,7 +40,10 @@ async def run(
     settings = settings or get_settings()
     configure_logging(settings.log_level, json=settings.is_prod)
     db = db or Database(settings.database_url)
-    await db.create_all()  # idempotent; keeps a fresh dev checkout working
+    # Creates missing tables and applies pending schema upgrades (idempotent,
+    # advisory-locked): the worker may start before the web app ever has.
+    changes = await db.create_all()
+    log.info("db.schema_ready", changes=len(changes))
     stop = stop_event or asyncio.Event()
     install_stop_signals(stop)
 

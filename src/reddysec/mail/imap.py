@@ -30,9 +30,9 @@ import asyncio
 import imaplib
 import re
 import ssl
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.parser import BytesHeaderParser
 from typing import Any, Protocol, TypeVar
 
@@ -169,6 +169,17 @@ _FLAGS_RE = re.compile(rb"FLAGS \(([^)]*)\)")
 
 def _quote_mailbox(name: str) -> str:
     return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def imap_date(value: datetime) -> str:
+    """RFC 3501 search date (``06-Nov-2026``), independent of the C locale.
+    Taken in UTC and a day early, so servers in any time zone include the
+    whole of ``value``'s day; the caller filters by exact time afterwards."""
+    day = (value.astimezone(UTC) - timedelta(days=1)).date()
+    return f"{day.day:02d}-{_MONTHS[day.month - 1]}-{day.year}"
 
 
 def parse_internaldate(value: str) -> datetime:
@@ -596,6 +607,24 @@ class ImapConnector:
 
         return await self._run(op)
 
+    async def backfill(self, since: datetime, limit: int, *, skip: Collection[str] = ()) -> list[RawMessage]:
+        """Inbox mail received since ``since``: ``UID SEARCH SINCE <date>``
+        (date-granular, so the exact time is checked after the fetch), newest
+        UIDs first, ids we already have dropped before anything is fetched."""
+        if limit <= 0:
+            return []
+        known = set(skip)
+
+        def op(sess: ImapSession) -> list[RawMessage]:
+            info = sess.select(INBOX)
+            uids = sorted(sess.uid_search(f"SINCE {imap_date(since)}"), reverse=True)
+            chosen = [u for u in uids if str(Location(INBOX, info.uidvalidity, u)) not in known][:limit]
+            fetched = sess.uid_fetch(sorted(chosen)) if chosen else []
+            return [self._to_raw(INBOX, info.uidvalidity, f) for f in fetched]
+
+        messages = [m for m in await self._run(op) if m.received_at >= since]
+        return sorted(messages, key=lambda m: m.received_at, reverse=True)
+
     async def fetch_raw(self, provider_message_id: str) -> bytes:
         loc = Location.parse(provider_message_id)
         rfc_id = await self._resolve_message_id(provider_message_id)
@@ -762,6 +791,7 @@ __all__ = [
     "Location",
     "SelectInfo",
     "hold_instructions",
+    "imap_date",
     "parse_cursor",
     "parse_internaldate",
     "resolve_endpoint",

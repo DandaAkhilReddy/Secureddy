@@ -11,7 +11,14 @@ Client requests ("This is fake", "This is safe", "Check again") are recorded
 by the web app as message states and carried out here, because only the worker
 holds mailbox access. They are handled after new mail on every cycle, and
 re-checks are rationed (``RESCORES_PER_CYCLE``) so a "re-check last 7 days"
-can never starve the protection of new mail.
+can never starve the protection of new mail. "Check my recent mail"
+(``mailbox_tasks`` backfills) is rationed the same way: one batch of
+``backfill_batch_size`` per mailbox per cycle, after new mail.
+
+One mailbox failing never stops the others, and never fails silently: after
+``mailbox_failures_before_error`` failed cycles in a row the mailbox shows as
+needing attention with a plain-English ``last_error``, and the worker keeps
+retrying it with a growing pause until a cycle succeeds.
 
 Dependencies on the analysis and chamber packages are resolved lazily and are
 injectable, so this module is testable with fakes and can be imported before
@@ -21,13 +28,14 @@ those packages exist.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from reddysec import ENGINE_VERSION
 from reddysec.config import Settings
@@ -49,6 +57,12 @@ from reddysec.models import (
     Verdict,
     VerdictLevel,
 )
+from reddysec.models.accounts import (
+    MAILBOX_ERROR_CHECK_FAILED,
+    MAILBOX_ERROR_SAVE_PLACE,
+    MAILBOX_ERROR_UNREACHABLE,
+    MAILBOX_RETRYING_ERRORS,
+)
 from reddysec.store import repo
 from reddysec.store.db import Database
 from reddysec.store.models import MailboxRow, MessageRow, utcnow
@@ -59,6 +73,15 @@ log = get_logger(__name__)
 MODE_KEY = "_mode"  # stored in mailbox.labels so a mode change re-runs setup
 SCAN_TIMEOUT_SLACK_S = 30
 RESCORES_PER_CYCLE = 10
+
+ERROR_SAVE_PLACE = MAILBOX_ERROR_SAVE_PLACE
+ERROR_CHECK_FAILED = MAILBOX_ERROR_CHECK_FAILED
+ERROR_UNREACHABLE = MAILBOX_ERROR_UNREACHABLE
+RETRYING_ERRORS = MAILBOX_RETRYING_ERRORS
+
+
+class CursorSaveError(Exception):
+    """Saving the mailbox's sync position failed (a database problem)."""
 
 Parser = Callable[..., ParsedMessage]
 Analyzer = Callable[[ParsedMessage, Any], Awaitable[Verdict]]
@@ -73,6 +96,8 @@ class CycleStats:
     failed: int = 0
     restored: int = 0
     client_requests: int = 0
+    backfilled: int = 0
+    deferred: int = 0  # mailboxes skipped this cycle while their retry pause runs
     mailbox_errors: list[str] = field(default_factory=list)
 
 
@@ -209,6 +234,10 @@ class Worker:
         self._sleep = sleep or self._sleep_until_wake
         self._wake = asyncio.Event()
         self.cycles = 0
+        # Consecutive failed cycles and the earliest next attempt, per mailbox.
+        # In memory on purpose: a restarted worker retries everything at once.
+        self._failures: dict[str, int] = {}
+        self._retry_at: dict[str, datetime] = {}
 
     # ------------------------------------------------------------ wiring
     @property
@@ -289,28 +318,91 @@ class Worker:
         stats = CycleStats()
         async with self._db.session() as session:
             mailboxes = await repo.list_active_mailboxes(session)
+            mailboxes += await repo.list_retrying_mailboxes(session, RETRYING_ERRORS)
+        now = self._clock()
         for mailbox in mailboxes:
+            retry_at = self._retry_at.get(mailbox.id)
+            if retry_at is not None and now < retry_at:
+                stats.deferred += 1
+                continue
             stats.mailboxes += 1
             try:
                 await self.process_mailbox(mailbox, stats)
             except AuthExpired as exc:
+                self._forget_failures(mailbox.id)
                 await self._mailbox_auth_expired(mailbox, exc)
                 stats.mailbox_errors.append(mailbox.id)
             except ConnectorError as exc:
                 stats.mailbox_errors.append(mailbox.id)
                 if exc.retryable:
                     log.warning("worker.mailbox_retry_later", mailbox_id=mailbox.id, error=str(exc))
+                    await self._mailbox_failure(mailbox, ERROR_UNREACHABLE, str(exc))
                     continue
+                self._forget_failures(mailbox.id)
                 await self._mailbox_failed(mailbox, str(exc))
+            except CursorSaveError as exc:
+                log.exception("worker.mailbox_crashed", mailbox_id=mailbox.id, stage="save_cursor")
+                stats.mailbox_errors.append(mailbox.id)
+                await self._mailbox_failure(mailbox, ERROR_SAVE_PLACE, repr(exc.__cause__ or exc))
             except Exception as exc:  # noqa: BLE001 - one mailbox must not stop the others
                 log.exception("worker.mailbox_crashed", mailbox_id=mailbox.id)
                 stats.mailbox_errors.append(mailbox.id)
-                async with self._db.session() as session:
-                    await repo.set_mailbox_status(
-                        session, mailbox.id, "active", error=f"worker error: {exc}"[:1000]
-                    )
+                await self._mailbox_failure(mailbox, ERROR_CHECK_FAILED, f"{type(exc).__name__}: {exc}")
+            else:
+                self._forget_failures(mailbox.id)
         self.cycles += 1
         return stats
+
+    def _forget_failures(self, mailbox_id: str) -> None:
+        self._failures.pop(mailbox_id, None)
+        self._retry_at.pop(mailbox_id, None)
+
+    def retry_delay_s(self, failures: int) -> float:
+        """No pause after the first failure (the next cycle retries), then
+        doubling from the poll interval, capped at ``mailbox_retry_max_seconds``."""
+        if failures <= 1:
+            return 0.0
+        delay = self.poll_interval_s * (2 ** (failures - 1))
+        return float(min(delay, self._settings.mailbox_retry_max_seconds))
+
+    async def _mailbox_failure(self, mailbox: MailboxRow, message: str, detail: str) -> None:
+        """Count a failed cycle. After ``mailbox_failures_before_error`` in a
+        row the client sees ``message`` instead of "Setting up" or a stale
+        "Protected", and our concierge is told once."""
+        failures = self._failures.get(mailbox.id, 0) + 1
+        self._failures[mailbox.id] = failures
+        delay = self.retry_delay_s(failures)
+        if delay:
+            self._retry_at[mailbox.id] = self._clock() + timedelta(seconds=delay)
+        else:
+            self._retry_at.pop(mailbox.id, None)
+        log.warning(
+            "worker.mailbox_failure", mailbox_id=mailbox.id, failures=failures, retry_in_s=delay, error=detail[:500]
+        )
+        if failures < self._settings.mailbox_failures_before_error:
+            return
+        if mailbox.status == "error" and mailbox.last_error == message:
+            return  # already showing it; keep retrying quietly
+        try:
+            async with self._db.session() as session:
+                await repo.set_mailbox_status(session, mailbox.id, "error", error=message)
+                await repo.audit(
+                    session,
+                    None,
+                    "system",
+                    "mailbox_retrying",
+                    mailbox.id,
+                    details={"failures": failures, "error": detail[:500]},
+                )
+        except SQLAlchemyError:  # the database itself may be what is failing
+            log.exception("worker.mailbox_status_failed", mailbox_id=mailbox.id)
+            return
+        mailbox.status, mailbox.last_error = "error", message
+        await self._notifier.notify_concierge(
+            f"Mailbox keeps failing ({mailbox.address})",
+            f"{failures} failed cycles in a row. Mailbox {mailbox.id}. Last error: {detail[:1000]}\n"
+            "The worker keeps retrying it with a growing pause.",
+        )
 
     # ---------------------------------------------------------- mailbox
     async def process_mailbox(self, mailbox: MailboxRow, stats: CycleStats | None = None) -> CycleStats:
@@ -322,6 +414,7 @@ class Worker:
         if not labels or labels.get(MODE_KEY) != mode.value:
             # First cycle for this mailbox, or its mode changed: (re)create labels
             # and install/remove the hold rule. The web app only writes the row.
+            first_setup = not labels and mailbox.cursor is None
             labels = dict(await connector.setup(mode))
             labels[MODE_KEY] = mode.value
             async with self._db.session() as session:
@@ -331,14 +424,40 @@ class Worker:
                 )
             mailbox.labels = labels
             log.info("worker.mailbox_setup", mailbox_id=mailbox.id, mode=mode.value)
+            if first_setup:
+                await self._request_initial_backfill(mailbox)
 
         messages, new_cursor = await connector.poll(mailbox.cursor)
+        await self._process_new(mailbox, connector, messages, stats)
+        # Saved as soon as the new mail is handled, so a failure further down
+        # (a client request, a backfill batch) never makes us read it again.
+        await self._save_cursor(mailbox, new_cursor)
+
+        stats.restored += await self._handle_restore_requests(mailbox, connector)
+        stats.client_requests += await self._handle_client_requests(mailbox, connector)
+        stats.backfilled += await self._handle_backfill(mailbox, connector, stats)
+
+        async with self._db.session() as session:
+            if mode is ProtectionMode.HOLD:
+                await repo.beat(session, mailbox.id, at=self._clock())
+            if mailbox.status != "active" or mailbox.last_error:
+                await repo.set_mailbox_status(session, mailbox.id, "active", error=None)
+        mailbox.status, mailbox.last_error = "active", None
+        return stats
+
+    async def _process_new(
+        self, mailbox: MailboxRow, connector: MailboxConnector, messages: Sequence[RawMessage], stats: CycleStats
+    ) -> int:
+        """Analyse each message we have not finished before. Returns how many
+        were attempted (checked or failed)."""
+        attempted = 0
         for raw in messages:
             async with self._db.session() as session:
                 existing = await repo.get_message_by_provider_id(session, mailbox.id, raw.provider_message_id)
             if existing is not None and existing.state not in repo.REPROCESSABLE_STATES:
                 stats.skipped += 1
                 continue
+            attempted += 1
             try:
                 await self.process_message(mailbox, connector, raw)
                 stats.messages += 1
@@ -352,18 +471,75 @@ class Worker:
                     provider_message_id=raw.provider_message_id,
                 )
                 await self._message_crashed(mailbox, connector, raw, exc)
+        return attempted
 
-        stats.restored += await self._handle_restore_requests(mailbox, connector)
-        stats.client_requests += await self._handle_client_requests(mailbox, connector)
+    async def _save_cursor(self, mailbox: MailboxRow, cursor: str | None) -> None:
+        try:
+            async with self._db.session() as session:
+                await repo.update_cursor(session, mailbox.id, cursor)
+        except SQLAlchemyError as exc:
+            raise CursorSaveError(f"could not save the cursor of mailbox {mailbox.id}") from exc
+        mailbox.cursor = cursor
 
+    # --------------------------------------------------------- backfill
+    async def _request_initial_backfill(self, mailbox: MailboxRow) -> None:
+        """A mailbox seen for the first time checks the last few days of mail
+        already in it, so its first screen is not empty."""
+        days, limit = self._settings.initial_backfill_days, self._settings.initial_backfill_limit
+        if days <= 0 or limit <= 0:
+            return
         async with self._db.session() as session:
-            await repo.update_cursor(session, mailbox.id, new_cursor)
-            if mode is ProtectionMode.HOLD:
-                await repo.beat(session, mailbox.id, at=self._clock())
-            if mailbox.status != "active" or mailbox.last_error:
-                await repo.set_mailbox_status(session, mailbox.id, "active", error=None)
-        mailbox.cursor = new_cursor
-        return stats
+            if await repo.has_backfill(session, mailbox.id):
+                return
+            await repo.request_backfill(
+                session, mailbox.id, since=self._clock() - timedelta(days=days), limit=limit, reason="first_setup"
+            )
+        log.info("worker.initial_backfill_requested", mailbox_id=mailbox.id, days=days, limit=limit)
+
+    async def _handle_backfill(self, mailbox: MailboxRow, connector: MailboxConnector, stats: CycleStats) -> int:
+        """One batch of an open "check my recent mail" request: mail received
+        since the request's ``since`` that we have never seen, newest first."""
+        async with self._db.session() as session:
+            task = await repo.open_backfill(session, mailbox.id)
+        if task is None:
+            return 0
+        backfill = getattr(connector, "backfill", None)
+        batch = max(0, min(self._settings.backfill_batch_size, task.max_messages - (task.processed or 0)))
+        if backfill is None or batch == 0:
+            async with self._db.session() as session:
+                error = None if backfill is not None else f"{mailbox.provider} cannot fetch older mail"
+                await repo.record_backfill_batch(session, task.id, processed=0, finished=True, error=error)
+            return 0
+        since = repo.aware(task.since) or self._clock()
+        async with self._db.session() as session:
+            known = await repo.provider_ids_since(session, mailbox.id, since - timedelta(days=1))
+        try:
+            raws = list(await backfill(since, batch, skip=known))[:batch]
+        except ConnectorError as exc:
+            if exc.retryable or isinstance(exc, AuthExpired):
+                raise
+            async with self._db.session() as session:
+                await repo.record_backfill_batch(session, task.id, processed=0, finished=True, error=str(exc))
+            log.warning("worker.backfill_failed", mailbox_id=mailbox.id, task_id=task.id, error=str(exc))
+            return 0
+        attempted = await self._process_new(mailbox, connector, raws, stats)
+        finished = len(raws) < batch or attempted == 0
+        async with self._db.session() as session:
+            row = await repo.record_backfill_batch(session, task.id, processed=attempted, finished=finished)
+            if row is not None and row.state == repo.TASK_DONE and row.processed:
+                await repo.audit(
+                    session,
+                    None,
+                    "system",
+                    "backfill_done",
+                    mailbox.id,
+                    task.id,
+                    {"checked": row.processed, "batches": row.batches, "reason": row.reason},
+                )
+        log.info(
+            "worker.backfill_batch", mailbox_id=mailbox.id, task_id=task.id, checked=attempted, finished=finished
+        )
+        return attempted
 
     async def _handle_restore_requests(self, mailbox: MailboxRow, connector: MailboxConnector) -> int:
         async with self._db.session() as session:

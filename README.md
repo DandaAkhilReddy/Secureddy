@@ -58,11 +58,19 @@ reddysec web                     # http://localhost:8000
 reddysec worker                  # in a second terminal
 ```
 
+Schema upgrades: `reddysec migrate` (also run by `init-db`, by the worker at
+startup and by the web app in dev) creates missing tables, widens columns
+whose models became wider (PostgreSQL), merges duplicate mailboxes and adds
+the one-mailbox-per-address index. It is idempotent and takes a PostgreSQL
+advisory lock, so several processes may run it at once.
+
 Run the tests:
 
 ```bash
 pytest                           # unit + functional
 pytest -m integration            # real browser detonations and the Reading Room
+pytest -m postgres               # against real PostgreSQL: RS_TEST_POSTGRES_URL, or a local
+                                 # install (initdb); skipped when neither is there
 pytest --cov=reddysec --cov-report=term-missing
 ```
 

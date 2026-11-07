@@ -21,7 +21,7 @@ import asyncio
 import base64
 import json
 import random
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -56,6 +56,9 @@ SKIP_SYSTEM_LABELS = frozenset({"DRAFT", "SENT", "SPAM", "TRASH"})
 VERDICT_LABELS = (LABEL_SAFE, LABEL_SUSPICIOUS, LABEL_QUARANTINE, LABEL_RELEASED)
 
 SEED_QUERY = "newer_than:1d"
+# Backfill reads the inbox only, like IMAP and Graph: archived mail stays
+# archived (HOLD mode puts a checked message *into* the inbox).
+BACKFILL_EXCLUDE = "in:inbox -in:sent -in:drafts -in:spam -in:trash"
 SEED_MAX_RESULTS = 50
 HISTORY_PAGE_SIZE = 500
 LIST_PAGE_SIZE = 500
@@ -406,6 +409,33 @@ class GmailConnector:
     async def fetch_raw(self, provider_message_id: str) -> bytes:
         body = await self._request("GET", f"messages/{provider_message_id}", params={"format": "raw"})
         return _decode_raw(body)
+
+    async def backfill(self, since: datetime, limit: int, *, skip: Collection[str] = ()) -> list[RawMessage]:
+        """List mail since ``since`` (newest first, Gmail's own order), drop
+        ids we already have, then download at most ``limit`` bodies."""
+        if limit <= 0:
+            return []
+        await self._label_ids()
+        query = f"after:{int(since.timestamp())} {BACKFILL_EXCLUDE}"
+        known = set(skip)
+        wanted: list[str] = []
+        page_token: str | None = None
+        while len(wanted) < limit:
+            params: dict[str, Any] = {"maxResults": LIST_PAGE_SIZE, "q": query}
+            if page_token:
+                params["pageToken"] = page_token
+            body = await self._request("GET", "messages", params=params)
+            for item in body.get("messages", []):
+                message_id = item.get("id")
+                if message_id and message_id not in known and message_id not in wanted:
+                    wanted.append(message_id)
+                    if len(wanted) >= limit:
+                        break
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
+        messages = [m for m in await self._fetch_many(wanted) if m.received_at >= since]
+        return sorted(messages, key=lambda m: m.received_at, reverse=True)
 
     async def apply_verdict(
         self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False

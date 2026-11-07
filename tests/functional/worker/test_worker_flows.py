@@ -561,7 +561,8 @@ class TestMailboxErrors:
         stats = await harness.worker().run_cycle()
         assert stats.mailbox_errors == [mailbox.id]
         row = await harness.mailbox_row(mailbox.id)
-        assert row.status == "active" and "worker error: bug" in row.last_error
+        # One failed cycle is not news; no stack trace ever reaches the client.
+        assert row.status == "active" and row.last_error is None
         fake.poll_error = None
         stats = await harness.worker().run_cycle()
         assert stats.mailbox_errors == [] and (await harness.mailbox_row(mailbox.id)).last_error is None

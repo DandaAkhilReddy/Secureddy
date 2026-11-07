@@ -23,6 +23,7 @@ from . import protected_router
 router = protected_router()
 
 MODES = ("scan", "hold")
+MAX_ADDRESS = 254  # the longest a real email address can be (RFC 5321 path limit)
 
 
 def _see_other(url: str = "/mailboxes") -> RedirectResponse:
@@ -122,7 +123,7 @@ async def add_imap_submit(
     if spec is None:
         return _add_imap_page(request, error="Please choose a mail provider.", form=form, status_code=400)
     address = address.strip().lower()
-    if "@" not in address or " " in address:
+    if "@" not in address or " " in address or len(address) > MAX_ADDRESS:
         return _add_imap_page(
             request, error="Please enter the full email address.", form=form, status_code=400
         )
@@ -151,8 +152,8 @@ async def add_imap_submit(
         )
 
     async with request.app.state.db.session() as session:
-        existing = await queries.list_mailboxes(session, user)
-        if any(m.address == address and m.status != "disconnected" for m in existing):
+        existing = await queries.find_mailbox_by_address(session, user.id, address)
+        if queries.mailbox_is_connected(existing):
             return _add_imap_page(
                 request, error="That mailbox is already connected.", form=form, status_code=400
             )
@@ -210,7 +211,7 @@ async def connect_yahoo_submit(
     address = address.strip().lower()
     # Yahoo shows the password in groups of four; people paste it with spaces.
     password = "".join(app_password.split())
-    if "@" not in address or " " in address:
+    if "@" not in address or " " in address or len(address) > MAX_ADDRESS:
         return _connect_yahoo_page(request, address=address, error="Please enter your full Yahoo email address.",
                                    status_code=400)
     if not password:
@@ -224,8 +225,8 @@ async def connect_yahoo_submit(
     except (ConnectorError, OSError):
         return _connect_yahoo_page(request, address=address, error=YAHOO_UNREACHABLE, status_code=502)
     async with request.app.state.db.session() as session:
-        existing = await queries.list_mailboxes(session, user)
-        if any(m.address == address and m.status != "disconnected" for m in existing):
+        existing = await queries.find_mailbox_by_address(session, user.id, address)
+        if queries.mailbox_is_connected(existing):
             return _connect_yahoo_page(request, address=address, error="That mailbox is already connected.",
                                        status_code=400)
         await queries.add_imap_mailbox(
@@ -306,16 +307,24 @@ async def sender_feedback_remove(
 
 @router.post("/mailboxes/{mailbox_id}/recheck", name="mailbox_recheck")
 async def mailbox_recheck(request: Request, mailbox_id: str, user: UserRow = Depends(current_user)) -> Response:
-    """Re-check the last 7 days with today's rules and the client's choices."""
+    """Check the last 7 days: re-check what we already checked with today's
+    rules and the client's choices, and ask the worker to fetch and check the
+    mail from those days we have never seen (a brand-new mailbox has none)."""
     async with request.app.state.db.session() as session:
         mailbox = await _owned_or_404(session, user, mailbox_id)
-        count = await queries.request_recheck_recent(session, user, mailbox)
-    if count:
-        flash(
-            request,
-            f"We are checking {count} email{'s' if count != 1 else ''} from the last 7 days again. "
-            "Labels in your mailbox update over the next few minutes.",
-        )
+        if mailbox.status in ("paused", "disconnected"):
+            message = RECHECK_PAUSED if mailbox.status == "paused" else RECHECK_NOT_CONNECTED
+        else:  # active, or in error: the request waits until the worker gets back in
+            await queries.request_recheck_recent(session, user, mailbox)
+            await queries.request_recent_backfill(session, user, mailbox)
+            message = None
+    if message:
+        flash(request, message, "warn")
     else:
-        flash(request, "There is no email from the last 7 days to check again.", "warn")
+        flash(request, RECHECK_STARTED)
     return _see_other()
+
+
+RECHECK_STARTED = "We're checking your email from the last 7 days. Results appear here within a few minutes."
+RECHECK_PAUSED = "Protection is paused for this mailbox. Resume protection first, then check your recent email."
+RECHECK_NOT_CONNECTED = "This mailbox is disconnected. Connect it again first, then check your recent email."

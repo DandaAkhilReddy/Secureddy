@@ -583,3 +583,36 @@ class TestEdges:
         with pytest.raises(GmailApiError) as info:
             await gmail_env.connector.poll(cursor)
         assert info.value.status == 400
+
+
+class TestBackfill:
+    async def test_lists_inbox_since_skips_known_and_fetches_only_what_it_returns(self, gmail_env: GmailEnv):
+        server = gmail_env.server
+        labels = await gmail_env.connector.setup(ProtectionMode.SCAN)
+
+        def at(hours: int) -> int:
+            return int((FIXED_NOW - timedelta(hours=hours)).timestamp() * 1000)
+
+        a = server.add_message(sample_raw("a"), internal_ms=at(100))
+        b = server.add_message(sample_raw("b"), internal_ms=at(50))
+        known = server.add_message(sample_raw("known"), internal_ms=at(10))
+        c = server.add_message(sample_raw("c"), internal_ms=at(5))
+        server.add_message(sample_raw("old"), internal_ms=at(24 * 9))
+        server.add_message(sample_raw("archived"), labels=("UNREAD",), internal_ms=at(3))
+        server.add_message(sample_raw("sent"), labels=("SENT", "INBOX"), internal_ms=at(2))
+        server.add_message(sample_raw("ours"), labels=("INBOX", labels[LABEL_SAFE]), internal_ms=at(1))
+        server.list_page_size = 2
+        server.calls.clear()
+        since = FIXED_NOW - timedelta(days=7)
+
+        got = await gmail_env.connector.backfill(since, 2, skip={known})
+
+        list_calls = server.calls_to("GET", "messages")
+        assert list_calls[0].params["q"] == [f"after:{int(since.timestamp())} in:inbox -in:sent -in:drafts -in:spam -in:trash"]
+        fetched = {c.path for c in server.calls if c.path.startswith("messages/")}
+        # "ours" was listed and fetched, then dropped by its label: the batch is short.
+        assert [m.provider_message_id for m in got] == [c]
+        assert len(fetched) == 2
+        rest = await gmail_env.connector.backfill(since, 10, skip={known, c})
+        assert [m.provider_message_id for m in rest] == [b, a]
+        assert await gmail_env.connector.backfill(since, 0) == []

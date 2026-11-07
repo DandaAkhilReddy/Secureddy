@@ -41,7 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -406,6 +406,38 @@ class GraphMailConnector:
 
     async def fetch_raw(self, provider_message_id: str) -> bytes:
         return await self._request("GET", f"messages/{provider_message_id}/$value", raw=True)
+
+    async def backfill(self, since: datetime, limit: int, *, skip: Collection[str] = ()) -> list[RawMessage]:
+        """Inbox mail received since ``since``, newest first: list ids and
+        dates a page at a time, drop what we already have, then download at
+        most ``limit`` bodies."""
+        if limit <= 0:
+            return []
+        folders = await self._folder_ids()
+        known = set(skip)
+        params: dict[str, Any] = {
+            "$select": DELTA_SELECT,
+            "$filter": f"receivedDateTime ge {_iso(since)}",
+            "$orderby": "receivedDateTime desc",
+            "$top": PAGE_SIZE,
+        }
+        wanted: dict[str, dict[str, Any]] = {}
+        url: str | None = f"mailFolders/{folders[INBOX_KEY]}/messages"
+        first = True
+        while url and len(wanted) < limit:
+            body = await self._request("GET", url, params=params if first else None)
+            first = False
+            for item in body.get("value", []):
+                if not isinstance(item, dict) or not item.get("id") or item.get("isDraft"):
+                    continue
+                if str(item["id"]) in known or set(item.get("categories") or []) & VERDICT_CATEGORIES:
+                    continue
+                wanted.setdefault(str(item["id"]), item)
+                if len(wanted) >= limit:
+                    break
+            url = body.get("@odata.nextLink")
+        messages = await self._fetch_many(list(wanted.values()))
+        return sorted(messages, key=lambda m: m.received_at, reverse=True)
 
     async def apply_verdict(
         self, msg: RawMessage, verdict: Verdict, policy: PolicyConfig, *, relabel: bool = False

@@ -34,6 +34,15 @@ class MailboxStatus(str, Enum):
     DISCONNECTED = "disconnected"
 
 
+# What the Mailboxes page shows while the worker keeps retrying a mailbox that
+# failed several cycles in a row. The worker recognises its own wording to know
+# which errors it may retry (a revoked password needs the client instead).
+MAILBOX_ERROR_SAVE_PLACE = "We couldn't save our place in your mailbox. We're fixing it."
+MAILBOX_ERROR_CHECK_FAILED = "We couldn't check this mailbox just now. We're fixing it."
+MAILBOX_ERROR_UNREACHABLE = "We couldn't reach your mail provider for a while. We keep trying."
+MAILBOX_RETRYING_ERRORS = (MAILBOX_ERROR_SAVE_PLACE, MAILBOX_ERROR_CHECK_FAILED, MAILBOX_ERROR_UNREACHABLE)
+
+
 class Mailbox(BaseModel):
     id: str
     principal_id: str
@@ -41,7 +50,7 @@ class Mailbox(BaseModel):
     address: str
     mode: ProtectionMode = ProtectionMode.SCAN
     status: MailboxStatus = MailboxStatus.ACTIVE
-    cursor: str | None = None  # Gmail historyId or IMAP UIDNEXT
+    cursor: str | None = None  # Gmail historyId, IMAP "uv:uid", Graph delta links (JSON)
     labels: dict[str, str] = Field(default_factory=dict)  # our label name -> provider id
     last_sync_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

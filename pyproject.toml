@@ -41,7 +41,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "aiosmtpd>=1.4", "qrcode>=7.4", "ruff>=0.5"]
+# asyncpg: the "postgres" tests run against a real PostgreSQL when one is
+# available (see tests/postgres/conftest.py) and skip cleanly otherwise.
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "aiosmtpd>=1.4", "qrcode>=7.4", "ruff>=0.5", "asyncpg>=0.30"]
 azure = [
   "azure-identity>=1.16",
   "azure-mgmt-containerinstance>=10.1",
@@ -67,6 +69,7 @@ addopts = "-q -p no:cacheprovider"
 markers = [
   "integration: runs a real browser or local servers; slower",
   "slow: takes more than a few seconds",
+  "postgres: needs a real PostgreSQL (RS_TEST_POSTGRES_URL, or initdb on PATH / /usr/lib/postgresql); skipped otherwise",
 ]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
 

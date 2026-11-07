@@ -38,6 +38,7 @@ from reddysec.store.models import (
     HoldHeartbeat,
     MailboxRow,
     MailboxSecret,
+    MailboxTaskRow,
     MessageRow,
     NotificationRow,
     SenderFeedbackRow,
@@ -67,6 +68,19 @@ CLIENT_REQUEST_STATES = frozenset(
 REPROCESSABLE_STATES = frozenset({STATE_PENDING, STATE_ANALYZING})
 
 MAX_DISPLAY_NAMES = 5
+
+# Mailbox tasks (``mailbox_tasks``): "check my recent mail".
+TASK_BACKFILL = "backfill"
+TASK_BACKFILL_REQUESTED = "backfill_requested"
+TASK_BACKFILL_RUNNING = "backfill_running"
+TASK_DONE = "done"
+TASK_FAILED = "failed"
+OPEN_TASK_STATES = (TASK_BACKFILL_REQUESTED, TASK_BACKFILL_RUNNING)
+
+
+def address_key(address: str) -> str:
+    """How a mailbox address is compared: trimmed and lower case."""
+    return address.strip().lower()
 
 
 def aware(value: datetime | None) -> datetime | None:
@@ -134,14 +148,27 @@ async def create_mailbox(
     mode: str = "scan",
     policy: dict[str, Any] | None = None,
 ) -> MailboxRow:
-    """``labels`` starts empty on purpose: the worker performs ``connector.setup``
+    """Create the mailbox, or take over the person's existing row for the same
+    address (one mailbox per person and address; see ``models``).
+
+    ``labels`` starts empty on purpose: the worker performs ``connector.setup``
     on its first cycle and persists the label map. Onboarding therefore never
-    needs mailbox write access from the web process."""
+    needs mailbox write access from the web process. Taking over an existing
+    row also empties ``labels`` (and the cursor when the provider changes) so
+    the worker sets it up again."""
+    existing = await find_mailbox_by_address(session, user_id, address)
+    if existing is not None:
+        reset_mailbox_for_reconnect(existing, provider=provider)
+        existing.mode = mode
+        if policy is not None:
+            existing.policy = dict(policy)
+        await session.flush()
+        return existing
     row = MailboxRow(
         id=new_id("mbx"),
         user_id=user_id,
         provider=provider,
-        address=address.strip().lower(),
+        address=address_key(address),
         mode=mode,
         status="active",
         labels={},
@@ -150,6 +177,38 @@ async def create_mailbox(
     session.add(row)
     await session.flush()
     return row
+
+
+async def find_mailbox_by_address(session: AsyncSession, user_id: str, address: str) -> MailboxRow | None:
+    """The person's mailbox for ``address``, whatever its provider or status.
+    Should a database still hold duplicates (before ``store.migrations`` ran),
+    the most useful row wins: active first, then newest."""
+    rows = list(
+        (
+            await session.execute(
+                select(MailboxRow)
+                .where(MailboxRow.user_id == user_id, func.lower(MailboxRow.address) == address_key(address))
+                .order_by(MailboxRow.created_at.desc())
+            )
+        ).scalars()
+    )
+    if not rows:
+        return None
+    return next((r for r in rows if r.status == "active"), rows[0])
+
+
+def reset_mailbox_for_reconnect(mailbox: MailboxRow, *, provider: str) -> None:
+    """A reconnect (new password or token, or a different way in) reuses the
+    row. A new provider means new folder ids and a cursor in another format,
+    so both are dropped; a disconnected row is set up again from scratch."""
+    if mailbox.provider != provider:
+        mailbox.provider = provider
+        mailbox.labels = {}
+        mailbox.cursor = None
+    elif mailbox.status == "disconnected":
+        mailbox.labels = {}
+    mailbox.status = "active"
+    mailbox.last_error = None
 
 
 async def get_mailbox(session: AsyncSession, mailbox_id: str) -> MailboxRow | None:
@@ -164,6 +223,19 @@ async def list_active_mailboxes(session: AsyncSession) -> list[MailboxRow]:
     stmt = (
         select(MailboxRow)
         .where(MailboxRow.status == "active")
+        .options(selectinload(MailboxRow.secret))
+        .order_by(MailboxRow.created_at)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def list_retrying_mailboxes(session: AsyncSession, errors: Iterable[str]) -> list[MailboxRow]:
+    """Mailboxes the worker itself put in error after repeated failures (it
+    knows them by its own ``last_error`` wording) and keeps retrying. Errors
+    only the client can fix, such as a revoked password, are not listed."""
+    stmt = (
+        select(MailboxRow)
+        .where(MailboxRow.status == "error", MailboxRow.last_error.in_(list(errors)))
         .options(selectinload(MailboxRow.secret))
         .order_by(MailboxRow.created_at)
     )
@@ -233,10 +305,12 @@ async def upsert_message(
         )
         session.add(row)
     row.thread_id = raw.thread_id
-    row.rfc_message_id = parsed.rfc_message_id[:500] if parsed.rfc_message_id else None
+    # Text: kept whole because IMAP finds a moved message by it; the cap only
+    # guards against a hostile multi-megabyte header.
+    row.rfc_message_id = parsed.rfc_message_id[:2000] if parsed.rfc_message_id else None
     row.from_address = parsed.from_address[:320]
     row.from_name = parsed.from_name[:300] if parsed.from_name else None
-    row.subject = parsed.subject[:1000]
+    row.subject = (parsed.subject or "")[:1000]
     row.received_at = raw.received_at
     row.url_count = len(parsed.urls)
     row.attachment_count = len(parsed.real_attachments)
@@ -419,7 +493,7 @@ async def record_trust_check(
     if not check.trusted_by_client or not check.scope or not check.value:
         return None
     when = at or utcnow()
-    value = check.value.lower()
+    value = check.value.lower()[:320]
     row = (
         await session.execute(
             select(SenderTrustStatsRow).where(
@@ -476,7 +550,7 @@ async def touch_contact(
     replied_to: bool = False,
     seen_at: datetime | None = None,
 ) -> Contact:
-    address = address.strip().lower()
+    address = address.strip().lower()[:320]
     seen_at = seen_at or utcnow()
     stmt = select(Contact).where(Contact.mailbox_id == mailbox_id, Contact.address == address)
     row = (await session.execute(stmt)).scalar_one_or_none()
@@ -494,7 +568,7 @@ async def touch_contact(
     row.message_count += 1
     row.last_seen = max(aware(row.last_seen) or seen_at, seen_at)
     row.replied_to = bool(row.replied_to or replied_to)
-    name = (display_name or "").strip()
+    name = (display_name or "").strip()[:300]
     if name and name not in (row.display_names or []):
         # Reassign (not mutate) so SQLAlchemy sees the JSON change.
         row.display_names = ([*(row.display_names or []), name])[-MAX_DISPLAY_NAMES:]
@@ -503,7 +577,7 @@ async def touch_contact(
 
 
 async def sender_history(session: AsyncSession, mailbox_id: str, address: str) -> SenderHistory | None:
-    stmt = select(Contact).where(Contact.mailbox_id == mailbox_id, Contact.address == address.strip().lower())
+    stmt = select(Contact).where(Contact.mailbox_id == mailbox_id, Contact.address == address.strip().lower()[:320])
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         return None
@@ -523,14 +597,14 @@ async def save_detonation(
 ) -> DetonationRow:
     row = await session.get(DetonationRow, result.job_id)
     if row is None:
-        row = DetonationRow(job_id=result.job_id, kind=kind, target=target, status=result.status.value)
+        row = DetonationRow(job_id=result.job_id, kind=kind[:10], target=target, status=result.status.value[:20])
         session.add(row)
     row.message_id = message_id or row.message_id
-    row.kind = kind
+    row.kind = kind[:10]
     row.target = target
-    row.status = result.status.value
+    row.status = result.status.value[:20]
     row.result = result.model_dump(mode="json")
-    row.sandbox_backend = result.sandbox_backend
+    row.sandbox_backend = (result.sandbox_backend or "")[:20]
     row.duration_ms = result.duration_ms
     await session.flush()
     return row
@@ -543,7 +617,7 @@ async def record_detonation_ref(
     pipeline already saved the full result, only the missing link is filled."""
     row = await session.get(DetonationRow, job_id)
     if row is None:
-        row = DetonationRow(job_id=job_id, message_id=message_id, kind=kind, target=target, status=status)
+        row = DetonationRow(job_id=job_id, message_id=message_id, kind=kind[:10], target=target, status=status[:20])
         session.add(row)
     elif row.message_id is None:
         row.message_id = message_id
@@ -630,8 +704,8 @@ async def audit(
     row = AuditLog(
         id=new_id("aud"),
         actor_id=actor_id,
-        actor_role=actor_role,
-        action=action,
+        actor_role=actor_role[:20],
+        action=action[:60],
         mailbox_id=mailbox_id,
         target=target,
         details=dict(details or {}),
@@ -717,3 +791,98 @@ async def count_messages(session: AsyncSession, mailbox_id: str, state: str | No
     if state is not None:
         stmt = stmt.where(MessageRow.state == state)
     return int((await session.execute(stmt)).scalar_one())
+
+
+async def provider_ids_since(session: AsyncSession, mailbox_id: str, since: datetime) -> set[str]:
+    """Provider ids of this mailbox's messages received since ``since``: what
+    a backfill must not fetch again."""
+    stmt = select(MessageRow.provider_message_id).where(
+        MessageRow.mailbox_id == mailbox_id, MessageRow.received_at >= since
+    )
+    return set((await session.execute(stmt)).scalars())
+
+
+# ------------------------------------------------------------ mailbox tasks
+async def request_backfill(
+    session: AsyncSession,
+    mailbox_id: str,
+    *,
+    since: datetime,
+    limit: int,
+    reason: str = "",
+    requested_by: str | None = None,
+) -> tuple[MailboxTaskRow, bool]:
+    """Ask the worker to check mail received since ``since`` that we have not
+    seen (at most ``limit``, newest first). Idempotent: while a backfill is
+    still open, a second request widens it instead of queueing another.
+    Returns (task, created)."""
+    open_task = await open_backfill(session, mailbox_id)
+    now = utcnow()
+    if open_task is not None:
+        open_task.since = min(aware(open_task.since) or since, since)
+        open_task.max_messages = max(open_task.max_messages, open_task.processed + limit)
+        open_task.updated_at = now
+        await session.flush()
+        return open_task, False
+    task = MailboxTaskRow(
+        id=new_id("tsk"),
+        mailbox_id=mailbox_id,
+        kind=TASK_BACKFILL,
+        state=TASK_BACKFILL_REQUESTED,
+        since=since,
+        max_messages=limit,
+        processed=0,
+        batches=0,
+        reason=reason[:30],
+        requested_by=requested_by,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(task)
+    await session.flush()
+    return task, True
+
+
+async def open_backfill(session: AsyncSession, mailbox_id: str) -> MailboxTaskRow | None:
+    stmt = (
+        select(MailboxTaskRow)
+        .where(
+            MailboxTaskRow.mailbox_id == mailbox_id,
+            MailboxTaskRow.kind == TASK_BACKFILL,
+            MailboxTaskRow.state.in_(OPEN_TASK_STATES),
+        )
+        .order_by(MailboxTaskRow.created_at)
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def has_backfill(session: AsyncSession, mailbox_id: str) -> bool:
+    """Whether this mailbox ever had a backfill (open or finished)."""
+    stmt = select(func.count()).select_from(MailboxTaskRow).where(
+        MailboxTaskRow.mailbox_id == mailbox_id, MailboxTaskRow.kind == TASK_BACKFILL
+    )
+    return int((await session.execute(stmt)).scalar_one()) > 0
+
+
+async def record_backfill_batch(
+    session: AsyncSession, task_id: str, *, processed: int, finished: bool, error: str | None = None
+) -> MailboxTaskRow | None:
+    task = await session.get(MailboxTaskRow, task_id)
+    if task is None:
+        return None
+    now = utcnow()
+    task.processed = (task.processed or 0) + processed
+    task.batches = (task.batches or 0) + 1
+    task.updated_at = now
+    if error is not None:
+        task.state = TASK_FAILED
+        task.error = error[:1000]
+        task.finished_at = now
+    elif finished or task.processed >= task.max_messages:
+        task.state = TASK_DONE
+        task.finished_at = now
+    else:
+        task.state = TASK_BACKFILL_RUNNING
+    await session.flush()
+    return task

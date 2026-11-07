@@ -127,7 +127,16 @@ class FakeGraph:
         if parts[0] == "mailFolders" and parts[-1] == "delta":
             return self._delta(parts[1], q)
         if parts[0] == "mailFolders" and parts[-1] == "messages":
-            items = [{"id": k} for k, v in self.messages.items() if v["folder"] == parts[1]]
+            cutoff = None
+            if "$filter" in q:
+                cutoff = datetime.fromisoformat(q["$filter"].split(" ge ")[1].replace("Z", "+00:00"))
+            listed = [(k, v) for k, v in self.messages.items()
+                      if v["folder"] == parts[1] and (cutoff is None or v["received"] >= cutoff)]
+            if q.get("$orderby") == "receivedDateTime desc":
+                listed.sort(key=lambda kv: kv[1]["received"], reverse=True)
+            items = [{"id": k, "receivedDateTime": v["received"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "categories": v["categories"], "isDraft": v["draft"], "conversationId": f"conv-{k}"}
+                     for k, v in listed]
             return self._page(items, q, url)
         if parts[0] == "messages":
             mid = parts[1]
@@ -152,8 +161,10 @@ class FakeGraph:
         page = items[skip: skip + self.PAGE]
         body: dict[str, Any] = {"value": page}
         if skip + self.PAGE < len(items):
+            # Like Graph, the next link carries the original query ($filter, $orderby ...).
             base = url.split("?")[0]
-            body["@odata.nextLink"] = f"{base}?$skip={skip + self.PAGE}"
+            keep = "".join(f"&{k}={v}" for k, v in q.items() if k != "$skip")
+            body["@odata.nextLink"] = f"{base}?$skip={skip + self.PAGE}{keep}"
         return httpx.Response(200, json=body)
 
     def _delta(self, folder: str, q: dict[str, str]) -> httpx.Response:
@@ -554,3 +565,30 @@ async def test_owned_client_lifecycle():
     assert conn.http is conn.http
     await conn.aclose()
     assert conn._http is None
+
+
+# ---------------------------------------------------------------- backfill
+
+
+async def test_backfill_lists_newest_first_skips_known_and_ours(graph):
+    conn = connector(graph)
+    await conn.setup(ProtectionMode.SCAN)
+    old = graph.deliver("too old", minutes_ago=60 * 24 * 10)
+    known = graph.deliver("known", minutes_ago=30)
+    ours = graph.deliver("ours", minutes_ago=20, categories=["Secureddy: Checked"])
+    graph.deliver("draft", minutes_ago=15, draft=True)
+    a = graph.deliver("a", minutes_ago=50)
+    b = graph.deliver("b", minutes_ago=10)
+    c = graph.deliver("c", minutes_ago=40)
+    graph.calls.clear()
+
+    got = await conn.backfill(NOW - timedelta(days=7), 2, skip={known})
+
+    assert [m.provider_message_id for m in got] == [b, c]  # newest first, capped before fetching
+    fetched = [p for m, p in graph.calls if p.endswith("/$value")]
+    assert sorted(fetched) == sorted([f"messages/{b}/$value", f"messages/{c}/$value"])
+    assert got[0].thread_id == f"conv-{b}" and got[0].raw.startswith(b"From:")
+    rest = await conn.backfill(NOW - timedelta(days=7), 20, skip={known, b, c})
+    assert [m.provider_message_id for m in rest] == [a]
+    assert old not in {m.provider_message_id for m in rest} and ours not in {m.provider_message_id for m in rest}
+    assert await conn.backfill(NOW, 0) == []

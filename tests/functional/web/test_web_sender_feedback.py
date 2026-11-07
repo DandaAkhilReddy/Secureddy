@@ -3,10 +3,14 @@ senders list, the clickable dashboard and the message list tabs."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+import pytest
 from sqlalchemy import select
 
 from reddysec.models import Signal, SignalStage
-from reddysec.store.models import AuditLog, MessageRow, SenderFeedbackRow
+from reddysec.store import repo
+from reddysec.store.models import AuditLog, MailboxTaskRow, MessageRow, SenderFeedbackRow
 
 DMARC_OK = Signal(code="auth.dmarc_pass_aligned", stage=SignalStage.STATIC, weight=-15, title="Verified")
 
@@ -196,14 +200,41 @@ class TestCheckAgain:
         assert (await _message(db, recent.id)).state == "rescore_requested"
         assert (await _message(db, old.id)).state == "done"
         assert (await _message(db, busy.id)).state == "analyzing"
-        assert "We are checking 1 email from the last 7 days again" in client.get("/mailboxes").text
+        assert "checking your email from the last 7 days" in client.get("/mailboxes").text
+        # ... and the mail from those days we have never seen is fetched too.
+        async with db.session() as s:
+            task = await repo.open_backfill(s, mailbox.id)
+        assert task is not None and task.max_messages == 200 and task.reason == "recheck"
 
-    async def test_mailbox_recheck_nothing(self, client, seed, login, csrf_of):
+    async def test_mailbox_recheck_new_mailbox_fetches_recent_mail(self, client, seed, login, csrf_of, db):
+        """A brand-new mailbox has nothing in our database: the button still
+        checks the last 7 days, by asking the worker to fetch them."""
         user = await seed.user("owner@example.com")
         mailbox = await seed.mailbox(user)
         login(client, "owner@example.com")
+        for _ in range(2):  # a double click queues one request, not two
+            client.post(f"/mailboxes/{mailbox.id}/recheck", data={"csrf_token": csrf_of(client, "/mailboxes")})
+        page = client.get("/mailboxes").text
+        assert "checking your email from the last 7 days. Results appear here within a few minutes." in page
+        assert "no email from the last 7 days" not in page
+        async with db.session() as s:
+            tasks = list((await s.execute(select(MailboxTaskRow))).scalars())
+        assert len(tasks) == 1 and tasks[0].state == "backfill_requested" and tasks[0].mailbox_id == mailbox.id
+        since = repo.aware(tasks[0].since)
+        assert timedelta(days=6, hours=23) < datetime.now(UTC) - since < timedelta(days=7, hours=1)
+        assert "backfill_requested" in await _actions(db)
+
+    @pytest.mark.parametrize(
+        ("status", "words"), [("paused", "Resume protection first"), ("disconnected", "Connect it again first")]
+    )
+    async def test_mailbox_recheck_needs_a_working_mailbox(self, client, seed, login, csrf_of, db, status, words):
+        user = await seed.user("owner@example.com")
+        mailbox = await seed.mailbox(user, status=status)
+        login(client, "owner@example.com")
         client.post(f"/mailboxes/{mailbox.id}/recheck", data={"csrf_token": csrf_of(client, "/mailboxes")})
-        assert "no email from the last 7 days" in client.get("/mailboxes").text
+        assert words in client.get("/mailboxes").text
+        async with db.session() as s:
+            assert (await s.execute(select(MailboxTaskRow))).first() is None
 
 
 class TestSenderList:

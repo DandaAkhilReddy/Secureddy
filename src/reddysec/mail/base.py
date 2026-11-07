@@ -7,6 +7,8 @@ room, not a hidden camera.
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from reddysec.models import PolicyConfig, ProtectionMode, Provider, RawMessage, Verdict
@@ -51,6 +53,15 @@ class MailboxConnector(Protocol):
 
     async def fetch_raw(self, provider_message_id: str) -> bytes:
         """Full RFC 5322 bytes of one message."""
+        ...
+
+    async def backfill(self, since: datetime, limit: int, *, skip: Collection[str] = ()) -> list[RawMessage]:
+        """Mail already in the inbox that was received at or after ``since``,
+        newest first, at most ``limit`` messages. Ids in ``skip`` (mail we
+        already checked) are left out *before* any body is downloaded, so a
+        batched backfill only pays for what it returns. Read-only, and
+        idempotent by ``provider_message_id``: the ids are the ones ``poll``
+        reports for the same messages."""
         ...
 
     async def apply_verdict(

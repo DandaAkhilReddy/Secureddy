@@ -4,13 +4,32 @@ Data minimization is a design rule, not a setting: we store message
 *metadata* and *verdicts*, never bodies. Bodies and attachments live in memory
 during analysis and in the client's own mailbox afterwards. Screenshots and
 sanitized copies go to the artifact store with a retention window.
+
+Column sizes. SQLite ignores ``VARCHAR(n)`` and PostgreSQL enforces it, so a
+length that is too small only fails in production. The rule: anything a
+provider hands us that we do not control (sync cursors, message, thread and
+identity ids) is ``Text``. ``String(n)`` is for our own ids and enums, and for
+human text that its writer truncates to fit. ``tests/unit/store/
+test_column_sizes.py`` enforces this, and ``store.migrations`` widens the
+columns of databases created before a column became ``Text``.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -32,7 +51,8 @@ class UserRow(Base):
     # Optional local credential for clients without a Google login (Yahoo-only).
     password_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
     totp_secret_enc: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    google_sub: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    # Opaque provider id: Text (see "Column sizes" in the module docstring).
+    google_sub: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
     # Family/assistant accounts point at the principal they help.
     principal_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -50,7 +70,9 @@ class MailboxRow(Base):
     address: Mapped[str] = mapped_column(String(320), index=True)
     mode: Mapped[str] = mapped_column(String(10), default="scan")
     status: Mapped[str] = mapped_column(String(20), default="active")
-    cursor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Opaque provider sync token: a Gmail historyId, an IMAP "uv:uid|uv:uid"
+    # or a Graph JSON document holding two delta links (well over 1 KB).
+    cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
     labels: Mapped[dict] = mapped_column(JSON, default=dict)
     policy: Mapped[dict] = mapped_column(JSON, default=dict)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -61,6 +83,14 @@ class MailboxRow(Base):
     secret: Mapped[MailboxSecret | None] = relationship(
         back_populates="mailbox", uselist=False, cascade="all, delete-orphan"
     )
+
+
+# One mailbox per person and address, whichever way it was connected (Gmail,
+# Microsoft, an app password): two rows for one mailbox would check and label
+# every message twice. Created by ``create_all`` on a fresh database and by
+# ``store.migrations`` (after merging duplicates) on an existing one.
+MAILBOX_UNIQUE_INDEX = "uq_mailboxes_user_address"
+Index(MAILBOX_UNIQUE_INDEX, MailboxRow.user_id, func.lower(MailboxRow.address), unique=True)
 
 
 class MailboxSecret(Base):
@@ -88,9 +118,11 @@ class MessageRow(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     mailbox_id: Mapped[str] = mapped_column(String(40), ForeignKey("mailboxes.id"), index=True)
-    provider_message_id: Mapped[str] = mapped_column(String(200))
-    thread_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    rfc_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Gmail ids are 16 hex chars, but Graph immutable ids and conversation ids
+    # run to 150+ and IMAP ids embed the folder name: all opaque, all Text.
+    provider_message_id: Mapped[str] = mapped_column(Text)
+    thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rfc_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     from_address: Mapped[str] = mapped_column(String(320), default="")
     from_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     subject: Mapped[str] = mapped_column(String(1000), default="")
@@ -184,7 +216,7 @@ class UserIdentityRow(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(40), ForeignKey("users.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20))  # google | microsoft | yahoo
-    subject: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(Text)
     email: Mapped[str] = mapped_column(String(320), default="", index=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     tenant: Mapped[str] = mapped_column(String(64), default="")
@@ -261,7 +293,7 @@ class AuditLog(Base):
     actor_role: Mapped[str] = mapped_column(String(20), default="system")
     action: Mapped[str] = mapped_column(String(60), index=True)
     mailbox_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
-    target: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    target: Mapped[str | None] = mapped_column(Text, nullable=True)  # may be a provider message id
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
@@ -315,3 +347,33 @@ class AssistantMessageRow(Base):
     role: Mapped[str] = mapped_column(String(10))  # user | assistant | tool
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MailboxTaskRow(Base):
+    """Work the client asked for on a whole mailbox, carried out by the worker
+    a batch at a time. Today one kind: ``backfill`` ("check my recent mail"),
+    which fetches mail received since ``since`` that we have never seen, at
+    most ``max_messages`` of it, newest first.
+
+    A separate table for the same ``create_all`` reason as ``sender_feedback``.
+    ``state``: ``backfill_requested`` -> ``backfill_running`` -> ``done`` |
+    ``failed``.
+    """
+
+    __tablename__ = "mailbox_tasks"
+    __table_args__ = (Index("ix_mailbox_tasks_mailbox_state", "mailbox_id", "state"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mailbox_id: Mapped[str] = mapped_column(String(40), ForeignKey("mailboxes.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="backfill")
+    state: Mapped[str] = mapped_column(String(30), default="backfill_requested")
+    since: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    max_messages: Mapped[int] = mapped_column(Integer, default=50)
+    processed: Mapped[int] = mapped_column(Integer, default=0)
+    batches: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str] = mapped_column(String(30), default="")  # first_setup | recheck | cli
+    requested_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

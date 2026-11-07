@@ -41,6 +41,21 @@ def cli_env(tmp_env, monkeypatch):
     return tmp_env
 
 
+class TestMigrate:
+    def test_migrate_reports_and_is_idempotent(self, cli_env, capsys):
+        assert cli.main(["migrate"]) == 0
+        assert "schema up to date (0 changes applied)" in capsys.readouterr().out
+
+    def test_migrate_prints_each_change(self, cli_env, capsys, monkeypatch):
+        async def fake_create_all(self):
+            return ["widened mailboxes.cursor from varchar(100) to text"]
+
+        monkeypatch.setattr(cli.Database, "create_all", fake_create_all)
+        assert cli.main(["migrate"]) == 0
+        out = capsys.readouterr().out
+        assert "widened mailboxes.cursor" in out and "(1 change applied)" in out
+
+
 class TestServiceCommands:
     def test_web_passes_host_and_port(self, cli_env, monkeypatch):
         seen: dict[str, Any] = {}

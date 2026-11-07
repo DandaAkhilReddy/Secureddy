@@ -18,6 +18,7 @@ from starlette.responses import HTMLResponse
 from starlette.templating import Jinja2Templates
 
 from reddysec import __version__
+from reddysec.models.accounts import MAILBOX_RETRYING_ERRORS
 
 from . import presenters
 from .queries import is_staff
@@ -123,6 +124,7 @@ def build_templates() -> Jinja2Templates:
     env.globals["FAKE_REASONS"] = presenters.FAKE_REASON_CHOICES
     env.globals["NOT_FAKE_REASONS"] = presenters.NOT_FAKE_REASON_CHOICES
     env.globals["NAV_ICONS"] = NAV_ICONS
+    env.globals["RETRYING_ERRORS"] = MAILBOX_RETRYING_ERRORS
     env.globals["PROVIDER_LOGOS"] = {
         "gmail": "google", "microsoft": "microsoft", "outlook": "microsoft", "yahoo": "yahoo",
     }

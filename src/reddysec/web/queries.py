@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reddysec.analysis.trust import is_shared_platform
@@ -69,6 +70,9 @@ from reddysec.store.repo import (
     STATE_QUARANTINE_REQUESTED,
     STATE_RELABEL_SAFE_REQUESTED,
     STATE_RESCORE_REQUESTED,
+    find_mailbox_by_address,
+    request_backfill,
+    reset_mailbox_for_reconnect,
 )
 
 STAFF_ROLES = frozenset({Role.CONCIERGE.value, Role.ADMIN.value})
@@ -246,9 +250,9 @@ async def _add_identity(
         user_id=user.id,
         provider=provider,
         subject=subject,
-        email=normalize_email(email),
+        email=normalize_email(email)[:320],
         email_verified=email_verified,
-        tenant=tenant,
+        tenant=(tenant or "")[:64],
         created_at=utcnow(),
         last_login_at=utcnow(),
     )
@@ -463,35 +467,11 @@ async def connect_oauth_mailbox(
     the previously stored refresh token. ``labels`` stays ``{}`` on a new
     mailbox so the worker runs ``setup`` on its next cycle."""
     address = normalize_email(address)
-    result = await session.execute(
-        select(MailboxRow).where(
-            MailboxRow.user_id == user.id, MailboxRow.provider == provider, MailboxRow.address == address
-        )
-    )
-    mailbox = result.scalar_one_or_none()
-    created = mailbox is None
-    if mailbox is None:
-        mailbox = MailboxRow(
-            id=new_id("mbx"),
-            user_id=user.id,
-            provider=provider,
-            address=address,
-            mode="scan",
-            status="active",
-            labels={},
-            policy={},
-            created_at=utcnow(),
-        )
-        session.add(mailbox)
-        await session.flush()
-    else:
+    mailbox, created = await claim_mailbox(session, user, provider=provider, address=address)
+    if not created:
         existing = await read_mailbox_secret(session, cipher, mailbox.id)
         if not token_payload.get("refresh_token") and existing and existing.get("refresh_token"):
             token_payload = {**token_payload, "refresh_token": existing["refresh_token"]}
-        if mailbox.status == "disconnected":
-            mailbox.labels = {}  # set the mailbox up again from scratch
-        mailbox.status = "active"
-        mailbox.last_error = None
     await _replace_secret(session, cipher, mailbox.id, kind, token_payload)
     audit(
         session,
@@ -532,30 +512,63 @@ async def add_imap_mailbox(
     """IMAP connection details travel with the password inside the encrypted
     secret: the connector needs both at once and the schema has no host column."""
     address = normalize_email(address)
-    mailbox = MailboxRow(
-        id=new_id("mbx"),
-        user_id=user.id,
-        provider=provider,
-        address=address,
-        mode="scan",
-        status="active",
-        labels={},
-        policy={},
-        created_at=utcnow(),
-    )
-    session.add(mailbox)
-    await session.flush()
+    mailbox, created = await claim_mailbox(session, user, provider=provider, address=address)
     secret = {"host": host, "port": port, "username": address, "password": password}
-    write_mailbox_secret(session, cipher, mailbox.id, "imap_password", secret)
+    await _replace_secret(session, cipher, mailbox.id, "imap_password", secret)
     audit(
         session,
         actor=user,
         action="mailbox_connected",
         mailbox_id=mailbox.id,
         target=address,
-        details={"provider": provider, "host": host, "port": port},
+        details={"provider": provider, "host": host, "port": port, "created": created},
     )
     return mailbox
+
+
+async def claim_mailbox(
+    session: AsyncSession, user: UserRow, *, provider: str, address: str
+) -> tuple[MailboxRow, bool]:
+    """The one row for (person, address): reuse it (reactivated, and set up
+    again if it was disconnected or the provider changed) or create it. Every
+    connect path comes through here; the unique index on (user, lower(address))
+    backs it up, so two submits racing each other still end with one row.
+    Returns (mailbox, created)."""
+    mailbox = await find_mailbox_by_address(session, user.id, address)
+    if mailbox is not None:
+        reset_mailbox_for_reconnect(mailbox, provider=provider)
+        return mailbox, False
+    mailbox = MailboxRow(
+        id=new_id("mbx"),
+        user_id=user.id,
+        provider=provider,
+        address=normalize_email(address),
+        mode="scan",
+        status="active",
+        labels={},
+        policy={},
+        created_at=utcnow(),
+    )
+    try:
+        async with session.begin_nested():
+            session.add(mailbox)
+            await session.flush()
+    except IntegrityError:
+        # Another request created it between our read and our insert.
+        winner = await find_mailbox_by_address(session, user.id, address)
+        if winner is None:  # pragma: no cover - the constraint that fired says it exists
+            raise
+        reset_mailbox_for_reconnect(winner, provider=provider)
+        return winner, False
+    return mailbox, True
+
+
+def mailbox_is_connected(mailbox: MailboxRow | None) -> bool:
+    """Connected (or paused on purpose): a second "connect" for it is a
+    mistake. A mailbox in error or disconnected may be connected again, which
+    is how a client fixes a wrong or revoked app password; the existing row is
+    reused either way (``claim_mailbox``)."""
+    return mailbox is not None and mailbox.status in ("active", "paused")
 
 
 async def set_mailbox_mode(session: AsyncSession, user: UserRow, mailbox: MailboxRow, mode: str) -> None:
@@ -1166,6 +1179,34 @@ async def request_recheck_recent(
         details={"days": days, "count": count},
     )
     return count
+
+
+async def request_recent_backfill(
+    session: AsyncSession,
+    user: UserRow,
+    mailbox: MailboxRow,
+    *,
+    days: int = RECHECK_DAYS,
+    limit: int = RECHECK_LIMIT,
+    now: datetime | None = None,
+) -> bool:
+    """Ask the worker to fetch and check mail from the last ``days`` that we
+    have never seen (a new mailbox, or mail that arrived while protection was
+    paused). Returns True when a new request was queued, False when an open
+    one was widened instead."""
+    since = (now or utcnow()) - timedelta(days=days)
+    _task, created = await request_backfill(
+        session, mailbox.id, since=since, limit=limit, reason="recheck", requested_by=user.id
+    )
+    audit(
+        session,
+        actor=user,
+        action="backfill_requested",
+        mailbox_id=mailbox.id,
+        target=mailbox.address,
+        details={"days": days, "limit": limit, "new": created},
+    )
+    return created
 
 
 # --------------------------------------------------------------------------

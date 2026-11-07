@@ -19,8 +19,8 @@
       </div>
       <div class="chips">{{ chip(m.status) }} {{ chip(m.mode) }}</div>
     </div>
-    {% if m.row.last_error and m.row.status == "error" %}
-    <p class="flash flash-warn">We hit a problem with this mailbox: {{ m.row.last_error }}</p>
+    {% if m.row.last_error and m.row.status in ("error", "active") %}
+    <p class="flash flash-warn" role="status">{% if m.row.last_error in RETRYING_ERRORS %}{{ m.row.last_error }}{% else %}We hit a problem with this mailbox: {{ m.row.last_error }}{% endif %}</p>
     {% endif %}
     {% if m.owned and m.row.status != "disconnected" %}
     <form method="post" action="/mailboxes/{{ m.row.id }}/mode" class="mode-form">

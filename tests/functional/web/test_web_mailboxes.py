@@ -248,3 +248,28 @@ async def test_assistant_can_see_but_not_manage_principal_mailbox(client, seed, 
     assert mailbox.address in page.text and "Only the account owner can change this mailbox" in page.text
     token = csrf_of(client, "/mailboxes")
     assert client.post(f"/mailboxes/{mailbox.id}/pause", data={"csrf_token": token}).status_code == 404
+
+
+async def test_mailbox_card_shows_the_workers_plain_error(client, seed, login):
+    from reddysec.models.accounts import MAILBOX_ERROR_SAVE_PLACE
+
+    user = await seed.user("owner@example.com")
+    await seed.mailbox(user, provider="yahoo", address="me@yahoo.com", status="error",
+                       last_error=MAILBOX_ERROR_SAVE_PLACE, labels={})
+    await seed.mailbox(user, provider="gmail", address="other@gmail.com", status="error",
+                       last_error="mailbox credentials expired or revoked")
+    login(client, "owner@example.com")
+    page = client.get("/mailboxes").text
+    assert "We couldn&#39;t save our place in your mailbox. We&#39;re fixing it." in page
+    assert "We hit a problem with this mailbox: We couldn" not in page
+    assert "Setting up" not in page and "Needs attention" in page
+    assert "We hit a problem with this mailbox: mailbox credentials expired or revoked" in page
+
+
+async def test_add_imap_rejects_an_overlong_address(client, seed, login, csrf_of):
+    await seed.user("owner@example.com")
+    login(client, "owner@example.com")
+    token = csrf_of(client, "/mailboxes/add-imap")
+    response = client.post("/mailboxes/add-imap", data={"csrf_token": token, "provider": "yahoo",
+                                                        "address": "a" * 250 + "@yahoo.com", "app_password": "x"})
+    assert response.status_code == 400 and "full email address" in response.text

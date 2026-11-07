@@ -3,6 +3,7 @@
 Subcommands
 -----------
 init-db             create the schema
+migrate             create missing tables and apply pending schema upgrades
 web                 run the FastAPI app (uvicorn)
 worker              run the processing loop (and, by default, the dead man's switch)
 deadman             run only the dead man's switch
@@ -77,6 +78,24 @@ def cmd_init_db(args: argparse.Namespace, settings: Settings) -> int:
 
     asyncio.run(go())
     print(f"database ready at {settings.database_url}")
+    return 0
+
+
+def cmd_migrate(args: argparse.Namespace, settings: Settings) -> int:
+    """Same work as ``init-db`` (``create_all`` runs the upgrades), but reports
+    what changed. Safe to run any time, also while the services run."""
+
+    async def go() -> list[str]:
+        db = Database(settings.database_url)
+        try:
+            return await db.create_all()
+        finally:
+            await db.dispose()
+
+    changes = asyncio.run(go())
+    for change in changes:
+        print(change)
+    print(f"schema up to date ({len(changes)} change{'s' if len(changes) != 1 else ''} applied)")
     return 0
 
 
@@ -225,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="create the database schema").set_defaults(func=cmd_init_db)
+    sub.add_parser("migrate", help="apply pending schema upgrades (idempotent)").set_defaults(func=cmd_migrate)
 
     web = sub.add_parser("web", help="run the web application")
     web.add_argument("--host", default="127.0.0.1")

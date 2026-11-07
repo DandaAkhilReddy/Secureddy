@@ -715,3 +715,34 @@ class TestMoreEdges:
         await c.setup(ProtectionMode.SCAN)
         with pytest.raises(ConnectorError, match="not found"):
             await c.restore("INBOX:111:5")
+
+
+class TestBackfill:
+    async def test_since_newest_first_skips_known_and_caps(self, imap_server: FakeImapServer):
+        now = datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
+        old = imap_server.deliver("INBOX", b"Subject: old\r\n\r\nx", date=now - timedelta(days=9))
+        edge = imap_server.deliver("INBOX", b"Subject: edge\r\n\r\nx", date=now - timedelta(days=7, hours=2))
+        a = imap_server.deliver("INBOX", b"Subject: a\r\n\r\nx", date=now - timedelta(days=3))
+        b = imap_server.deliver("INBOX", b"Subject: b\r\n\r\nx", date=now - timedelta(days=1))
+        c = imap_server.deliver("INBOX", b"Subject: c\r\n\r\nx", date=now - timedelta(hours=1))
+        conn = connector(imap_server)
+        uv = imap_server.folders["INBOX"].uidvalidity
+        since = now - timedelta(days=7)
+
+        got = await conn.backfill(since, 2, skip={f"INBOX:{uv}:{c}"})
+
+        assert [m.provider_message_id for m in got] == [f"INBOX:{uv}:{b}", f"INBOX:{uv}:{a}"]
+        searches = [args[0] for name, args in imap_server.calls if name == "search"]
+        assert searches == ["SINCE 29-Oct-2026"]  # a day early: date-only, server time zone
+        fetches = [args[0] for name, args in imap_server.calls if name == "fetch"]
+        assert fetches == [(a, b)]  # only what is returned is downloaded
+        rest = await conn.backfill(since, 10, skip={m.provider_message_id for m in got})
+        # "edge" matched SINCE (date-granular) but is older than since: dropped.
+        assert [m.provider_message_id for m in rest] == [f"INBOX:{uv}:{c}"]
+        assert old not in {int(m.provider_message_id.rsplit(":", 1)[1]) for m in rest} and edge
+        assert await conn.backfill(since, 0) == []
+
+    def test_imap_date_ignores_locale(self):
+        from reddysec.mail.imap import imap_date
+
+        assert imap_date(datetime(2026, 3, 1, 0, 30, tzinfo=UTC)) == "28-Feb-2026"

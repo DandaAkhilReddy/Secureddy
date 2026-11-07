@@ -160,7 +160,8 @@ class TestMessages:
         p.rfc_message_id = "<" + "x" * 600 + ">"
         async with db.session() as s:
             row = await repo.upsert_message(s, p, raw("p1", mailbox.id))
-            assert len(row.subject) == 1000 and len(row.rfc_message_id) == 500
+            # rfc_message_id is Text (IMAP finds moved mail by it): only a hostile size is cut.
+            assert len(row.subject) == 1000 and len(row.rfc_message_id) == 602
 
     async def test_record_verdict_and_recent_listing(self, db, mailbox):
         async with db.session() as s:

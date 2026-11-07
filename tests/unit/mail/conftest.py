@@ -360,6 +360,13 @@ class FakeGmailServer:
                 (self.now - timedelta(days=1)).timestamp() * 1000
             ):
                 continue
+            after = re.search(r"\bafter:(\d+)", q)
+            if after and int(msg["internalDate"]) < int(after.group(1)) * 1000:
+                continue
+            if "in:inbox" in q.split() and "INBOX" not in labels:
+                continue
+            if ("-in:sent" in q and "SENT" in labels) or ("-in:drafts" in q and "DRAFT" in labels):
+                continue
             items.append({"id": msg["id"], "threadId": msg["threadId"]})
         size = min(int(params.get("maxResults", ["100"])[0]), self.list_page_size)
         start = int(params.get("pageToken", ["0"])[0])
@@ -590,6 +597,10 @@ class FakeImapSession:
         m = re.fullmatch(r"UID (\d+)", criteria)
         if m:
             return [int(m.group(1))] if int(m.group(1)) in folder.messages else []
+        m = re.fullmatch(r"SINCE (\d{2})-([A-Z][a-z]{2})-(\d{4})", criteria)
+        if m:
+            day = datetime.strptime(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", "%d-%b-%Y").date()
+            return [u for u in uids if folder.messages[u]["date"].date() >= day]
         m = re.fullmatch(r'HEADER Message-ID "([^"]+)"', criteria)
         if m:
             needle = m.group(1).encode()
