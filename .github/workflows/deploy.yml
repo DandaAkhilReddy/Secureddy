@@ -82,7 +82,7 @@ jobs:
             echo "tag=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         if: github.event.inputs.image_tag == ''
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -114,7 +114,7 @@ jobs:
     environment: ${{ github.event.inputs.environment || 'prod' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -162,7 +162,7 @@ jobs:
     timeout-minutes: 30
     environment: ${{ github.event.inputs.environment || 'prod' }}
     steps:
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
