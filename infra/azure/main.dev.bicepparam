@@ -83,3 +83,5 @@ param monthlyBudgetUsd = 200
 
 // CI/CD (CHANGE to your GitHub owner/repo to enable OIDC deploys)
 param githubRepository = 'DandaAkhilReddy/Secureddy'
+
+param yahooClientId = 'dj0yJmk9T3JiQWxQdnFaNjR0JmQ9WVdrOWVEUXdVbmRqYWxJbWNHbzlNQT09JnM9Y29uc3VtZXJzZWNyZXQmc3Y9MCZ4PThi'

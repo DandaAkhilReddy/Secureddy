@@ -134,6 +134,9 @@ param googleClientId string = ''
 param googlePubsubTopic string = ''
 @description('Entra app id for Sign in with Microsoft + Graph mail. Needs Key Vault secrets rs-microsoft-client-cert and rs-microsoft-cert-thumbprint. Empty = off.')
 param microsoftClientId string = ''
+
+@description('Yahoo OpenID Connect client id; its secret is rs-yahoo-client-secret in Key Vault.')
+param yahooClientId string = ''
 @description('RS_ANTHROPIC_API_KEY from Key Vault secret rs-anthropic-api-key.')
 param anthropicEnabled bool = false
 @description('RS_LLM_PROVIDER when Azure OpenAI is off (none | anthropic | azure_foundry).')
@@ -423,6 +426,7 @@ module containerApps 'modules/containerapps.bicep' = if (deployApps) {
     googleClientId: googleClientId
     googlePubsubTopic: googlePubsubTopic
     microsoftClientId: microsoftClientId
+    yahooClientId: yahooClientId
     anthropicEnabled: anthropicEnabled
     llmProvider: llmProvider
     assistantProvider: assistantProvider
